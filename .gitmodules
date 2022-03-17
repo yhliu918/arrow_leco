@@ -4,3 +4,6 @@
 [submodule "testing"]
 	path = testing
 	url = https://github.com/apache/arrow-testing
+[submodule "OpenFormat"]
+	path = cpp/submodules/OpenFormat
+	url = https://github.com/XinyuZeng/OpenFormat.git

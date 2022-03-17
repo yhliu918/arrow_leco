@@ -15,32 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-thirdparty/*.tar*
-CMakeFiles/
-CMakeCache.txt
-CMakeUserPresets.json
-CTestTestfile.cmake
-Makefile
-cmake_install.cmake
-build/
-build-debug/
-*-build/
-Testing/
-build-support/boost_*
-vcpkg_installed/
+add_executable(pq_writer pq_writer.cc)
+add_executable(pq_reader pq_reader.cc)
+# target_include_directories(parquet-low-level-example PRIVATE low_level_api/)
+# target_include_directories(parquet-low-level-example2 PRIVATE low_level_api/)
 
-# Build directories created by Clion
-cmake-build-*/
 
-#########################################
-# Editor temporary/working/backup files #
-.#*
-*\#*\#
-[#]*#
-*~
-*$
-*.bak
-*flymake*
-*.kdev4
-*.log
-*.swp
+# Prefer shared linkage but use static if shared build is deactivated
+if(ARROW_BUILD_SHARED)
+  set(PARQUET_EXAMPLE_LINK_LIBS parquet_shared)
+else()
+  set(PARQUET_EXAMPLE_LINK_LIBS parquet_static)
+endif()
+
+
+add_library(gprof SHARED IMPORTED)
+set_target_properties(gprof PROPERTIES IMPORTED_LOCATION /usr/local/lib/libprofiler.so)
+
+target_link_libraries(pq_writer ${PARQUET_EXAMPLE_LINK_LIBS} arrow_shared)
+target_link_libraries(pq_reader ${PARQUET_EXAMPLE_LINK_LIBS} arrow_shared gprof)
+
+
+add_dependencies(parquet pq_writer pq_reader)
