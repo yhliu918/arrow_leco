@@ -45,6 +45,27 @@
 namespace arrow {
 namespace util {
 
+#define BILLION 1000000000UL
+#define CPU_FREQ 2.7
+// static uint64_t decode_time = 0;
+// static uint64_t uncompress_time = 0;
+inline uint64_t get_server_clock() {
+#if defined(__i386__)
+  uint64_t ret;
+  __asm__ __volatile__("rdtsc" : "=A"(ret));
+#elif defined(__x86_64__)
+  unsigned hi, lo;
+  __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+  uint64_t ret = ((uint64_t)lo) | (((uint64_t)hi) << 32);
+  ret = (uint64_t)((double)ret / CPU_FREQ);
+#else
+  timespec* tp = new timespec;
+  clock_gettime(CLOCK_REALTIME, tp);
+  uint64_t ret = tp->tv_sec * 1000000000 + tp->tv_nsec;
+#endif
+  return ret;
+}
+
 enum class ArrowLogLevel : int {
   ARROW_DEBUG = -1,
   ARROW_INFO = 0,

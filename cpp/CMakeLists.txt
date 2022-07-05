@@ -984,6 +984,7 @@ if(ARROW_PARQUET)
   if(PARQUET_BUILD_EXAMPLES)
     add_subdirectory(examples/parquet)
   endif()
+  add_subdirectory(src/openformat)
 endif()
 
 if(ARROW_JNI)
@@ -1023,5 +1024,3 @@ config_summary_message()
 if(${ARROW_BUILD_CONFIG_SUMMARY_JSON})
   config_summary_json()
 endif()
-
-add_subdirectory(src/open_format)

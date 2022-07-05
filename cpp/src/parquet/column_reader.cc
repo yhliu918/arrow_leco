@@ -18,6 +18,7 @@
 #include "parquet/column_reader.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -483,6 +484,7 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
 std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
     std::shared_ptr<Buffer> page_buffer, int compressed_len, int uncompressed_len,
     int levels_byte_len) {
+  // auto begin = std::chrono::high_resolution_clock::now();
   if (decompressor_ == nullptr) {
     return page_buffer;
   }
@@ -507,6 +509,10 @@ std::shared_ptr<Buffer> SerializedPageReader::DecompressIfNeeded(
       uncompressed_len - levels_byte_len,
       decompression_buffer_->mutable_data() + levels_byte_len));
 
+  // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+  //                  std::chrono::high_resolution_clock::now() - begin)
+  //                  .count()
+  //           << ",";
   return decompression_buffer_;
 }
 
@@ -614,7 +620,12 @@ class ColumnReaderImplBase {
   bool ReadNewPage() {
     // Loop until we find the next data page.
     while (true) {
+      // auto begin = std::chrono::high_resolution_clock::now();
       current_page_ = pager_->NextPage();
+      // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+      //                  std::chrono::high_resolution_clock::now() - begin)
+      //                  .count()
+      //           << "\n";
       if (!current_page_) {
         // EOS
         return false;
@@ -1699,10 +1710,16 @@ class ByteArrayChunkedRecordReader : public TypedRecordReader<ByteArrayType>,
     ResetValues();
   }
 
+  // here for string
   void ReadValuesSpaced(int64_t values_to_read, int64_t null_count) override {
+    // auto begin = std::chrono::high_resolution_clock::now();
     int64_t num_decoded = this->current_decoder_->DecodeArrow(
         static_cast<int>(values_to_read), static_cast<int>(null_count),
         valid_bits_->mutable_data(), values_written_, &accumulator_);
+    // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+    //                  std::chrono::high_resolution_clock::now() - begin)
+    //                  .count()
+    //           << "\n";
     CheckNumberDecoded(num_decoded, values_to_read - null_count);
     ResetValues();
   }

@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": false,
+    "file_path": "/root/arrow-private/cpp/src/openformat/data/Anunciante_both_no.parquet",
+    "prof_name": "orders.prof",
+    "use_threads": true
+}

@@ -30,7 +30,7 @@
       "inherits": "base",
       "hidden": true,
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "RELEASE"
       }
     },
     {
@@ -161,17 +161,33 @@
       }
     },
     {
-      "name": "openformat",
+      "name": "openformat-release",
+      "inherits": [
+        "base-release",
+        "features-main"
+      ],
+      "displayName": "openformat-release",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ARROW_PARQUET": "ON",
+        "PARQUET_BUILD_EXECUTABLES": "ON",
+        "ARROW_ORC": "ON",
+        "PARQUET_BUILD_EXAMPLES": "OFF"
+      }
+    },
+    {
+      "name": "openformat-debug",
       "inherits": [
         "base-debug",
         "features-main"
       ],
-      "displayName": "openformat",
+      "displayName": "openformat-debug",
       "cacheVariables": {
-        "ARROW_BUILD_INTEGRATION": "OFF",
-        "ARROW_BUILD_TESTS": "OFF",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ARROW_PARQUET": "ON",
-        "PARQUET_BUILD_EXAMPLES": "OFF"
+        "PARQUET_BUILD_EXAMPLES": "OFF",
+        "ARROW_ORC": "ON",
+        "PARQUET_BUILD_EXECUTABLES": "ON"
       }
     },
     {

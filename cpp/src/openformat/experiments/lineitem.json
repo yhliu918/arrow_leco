@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": true,
+    "file_path": "/root/arrow-private/cpp/src/openformat/data/lineitem_1M.parquet",
+    "prof_name": "lineitem.prof",
+    "use_threads": false
+}

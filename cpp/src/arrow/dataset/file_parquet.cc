@@ -17,6 +17,7 @@
 
 #include "arrow/dataset/file_parquet.h"
 
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -441,7 +442,13 @@ Result<RecordBatchGenerator> ParquetFileFormat::ScanBatchesAsync(
   // prior statistics knowledge. In the case where a RowGroup doesn't have statistics
   // metdata, it will not be excluded.
   if (parquet_fragment->metadata() != nullptr) {
+    // print time
+    // auto start = std::chrono::high_resolution_clock::now();
     ARROW_ASSIGN_OR_RAISE(row_groups, parquet_fragment->FilterRowGroups(options->filter));
+    // print time
+    // auto end = std::chrono::high_resolution_clock::now();
+    // std::cout << ((std::chrono::duration<float>)(end - start)).count() << "a"
+    //           << std::endl;
     pre_filtered = true;
     if (row_groups.empty()) return MakeEmptyGenerator<std::shared_ptr<RecordBatch>>();
   }
@@ -454,8 +461,15 @@ Result<RecordBatchGenerator> ParquetFileFormat::ScanBatchesAsync(
     RETURN_NOT_OK(parquet_fragment->EnsureCompleteMetadata(reader.get()));
     if (!pre_filtered) {
       // row groups were not already filtered; do this now
+
+      // print time
+      auto start = std::chrono::high_resolution_clock::now();
       ARROW_ASSIGN_OR_RAISE(row_groups,
                             parquet_fragment->FilterRowGroups(options->filter));
+      // print time
+      auto end = std::chrono::high_resolution_clock::now();
+      std::cout << ((std::chrono::duration<float>)(end - start)).count() << "b"
+                << std::endl;
       if (row_groups.empty()) return MakeEmptyGenerator<std::shared_ptr<RecordBatch>>();
     }
     ARROW_ASSIGN_OR_RAISE(auto column_projection,
@@ -637,7 +651,13 @@ Status ParquetFileFragment::SetMetadata(
 Result<FragmentVector> ParquetFileFragment::SplitByRowGroup(
     compute::Expression predicate) {
   RETURN_NOT_OK(EnsureCompleteMetadata());
+  // print time
+  // auto start = std::chrono::high_resolution_clock::now();
   ARROW_ASSIGN_OR_RAISE(auto row_groups, FilterRowGroups(predicate));
+  // print time
+  // auto end = std::chrono::high_resolution_clock::now();
+  // std::cout << ((std::chrono::duration<float>)(end - start)).count() << "c" <<
+  // std::endl;
 
   FragmentVector fragments(row_groups.size());
   int i = 0;
@@ -656,7 +676,14 @@ Result<FragmentVector> ParquetFileFragment::SplitByRowGroup(
 Result<std::shared_ptr<Fragment>> ParquetFileFragment::Subset(
     compute::Expression predicate) {
   RETURN_NOT_OK(EnsureCompleteMetadata());
+
+  // print time
+  // auto start = std::chrono::high_resolution_clock::now();
   ARROW_ASSIGN_OR_RAISE(auto row_groups, FilterRowGroups(predicate));
+  // print time
+  // auto end = std::chrono::high_resolution_clock::now();
+  // std::cout << ((std::chrono::duration<float>)(end - start)).count() << "d" <<
+  // std::endl;
   return Subset(std::move(row_groups));
 }
 
@@ -893,7 +920,12 @@ ParquetDatasetFactory::CollectParquetFragments(const Partitioning& partitioning)
   size_t i = 0;
   for (const auto& e : paths_with_row_group_ids_) {
     const auto& path = e.first;
+    // print time
+    // auto start = std::chrono::high_resolution_clock::now();
     auto metadata_subset = metadata_->Subset(e.second);
+    // print time
+    // auto end = std::chrono::high_resolution_clock::now();
+    // std::cout << ((std::chrono::duration<float>)(end - start)).count() << std::endl;
 
     auto row_groups = Iota(metadata_subset->num_row_groups());
 

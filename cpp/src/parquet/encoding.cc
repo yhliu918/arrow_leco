@@ -18,8 +18,10 @@
 #include "parquet/encoding.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <string>
@@ -1363,6 +1365,7 @@ class PlainByteArrayDecoder : public PlainDecoder<ByteArrayType>,
   }
 
  private:
+  // plain decode path for dense binary
   Status DecodeArrowDense(int num_values, int null_count, const uint8_t* valid_bits,
                           int64_t valid_bits_offset,
                           typename EncodingTraits<ByteArrayType>::Accumulator* out,
@@ -1870,6 +1873,8 @@ class DictByteArrayDecoderImpl : public DictDecoderImpl<ByteArrayType>,
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
                   typename EncodingTraits<ByteArrayType>::Accumulator* out) override {
+    // uint64_t begin = ::arrow::util::get_server_clock();
+    // auto begin = std::chrono::high_resolution_clock::now();
     int result = 0;
     if (null_count == 0) {
       PARQUET_THROW_NOT_OK(DecodeArrowDenseNonNull(num_values, out, &result));
@@ -1877,6 +1882,10 @@ class DictByteArrayDecoderImpl : public DictDecoderImpl<ByteArrayType>,
       PARQUET_THROW_NOT_OK(DecodeArrowDense(num_values, null_count, valid_bits,
                                             valid_bits_offset, out, &result));
     }
+    // std::cout << std::chrono::duration_cast<std::chrono::milliseconds>(
+    //                  std::chrono::high_resolution_clock::now() - begin)
+    //                  .count()
+    //           << ",";
     return result;
   }
 
@@ -1896,6 +1905,7 @@ class DictByteArrayDecoderImpl : public DictDecoderImpl<ByteArrayType>,
     int pos_indices = 0;
 
     auto visit_valid = [&](int64_t position) -> Status {
+      // auto begin = std::chrono::high_resolution_clock::now();
       if (num_indices == pos_indices) {
         // Refill indices buffer
         const auto batch_size =
@@ -1909,6 +1919,10 @@ class DictByteArrayDecoderImpl : public DictDecoderImpl<ByteArrayType>,
       const auto index = indices[pos_indices++];
       RETURN_NOT_OK(IndexInBounds(index));
       const auto& val = dict_values[index];
+      // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+      //                  std::chrono::high_resolution_clock::now() - begin)
+      //                  .count()
+      //           << "\n";
       if (ARROW_PREDICT_FALSE(!helper.CanFit(val.len))) {
         RETURN_NOT_OK(helper.PushChunk());
       }
@@ -1965,9 +1979,14 @@ class DictByteArrayDecoderImpl : public DictDecoderImpl<ByteArrayType>,
       int num_indices = idx_decoder_.GetBatch(indices, batch_size);
       if (num_indices == 0) ParquetException::EofException();
       for (int i = 0; i < num_indices; ++i) {
+        // auto begin = std::chrono::high_resolution_clock::now();
         auto idx = indices[i];
         RETURN_NOT_OK(IndexInBounds(idx));
         const auto& val = dict_values[idx];
+        // std::cout << std::chrono::duration_cast<std::chrono::microseconds>(
+        //                  std::chrono::high_resolution_clock::now() - begin)
+        //                  .count()
+        //           << "\n";
         if (ARROW_PREDICT_FALSE(!helper.CanFit(val.len))) {
           RETURN_NOT_OK(helper.PushChunk());
         }

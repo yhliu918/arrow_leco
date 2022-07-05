@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": false,
+    "file_path": "/root/arrow-private/cpp/src/openformat/data/one_table/Anunciante_dict_no_snappy.parquet",
+    "prof_name": "Anunciante_dict.prof",
+    "use_threads": false
+}

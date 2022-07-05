@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": true,
+    "file_path": "/root/arrow-private/cpp/src/openformat/data/Anunciante_snappy.parquet",
+    "prof_name": "Anunciante_snappy.prof",
+    "use_threads": true
+}

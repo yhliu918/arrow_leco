@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": false,
+    "file_path": "/root/arrow-private/cpp/src/openformat/data/Generico_2_dict_snappy.parquet",
+    "prof_name": "Generico_2_both_yes.prof",
+    "use_threads": true
+}
