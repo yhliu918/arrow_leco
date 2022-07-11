@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": true,
+    "file_path": "/mnt/OpenFormat/python/Medicare1_UNCOMPRESSED_speed_1.orc",
+    "prof_name": "Medicare1_dict_no_snappy_orc.prof",
+    "use_threads": false
+}

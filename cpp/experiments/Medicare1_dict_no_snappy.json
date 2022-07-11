@@ -1,0 +1,6 @@
+{
+    "profiler_enabled": false,
+    "file_path": "/mnt/OpenFormat/python/Medicare1_NONE_True_1048576_2.6_2.0.parquet",
+    "prof_name": "Medicare1_dict_no_snappy.prof",
+    "use_threads": false
+}
