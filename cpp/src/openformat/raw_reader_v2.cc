@@ -28,13 +28,19 @@ namespace fs = arrow::fs;
 namespace cp = arrow::compute;
 
 arrow::Status RunMain(int argc, char** argv) {
-  std::ifstream ifs = std::ifstream(argv[1]);
-  nlohmann::json ex_jf = nlohmann::json::parse(ifs);
-  bool profiler_enabled = ex_jf["profiler_enabled"];
-  std::string file_path = ex_jf["file_path"];
-  std::string prof_name = ex_jf["prof_name"];
-  bool use_threads = ex_jf["use_threads"];
-  int batch_size = atoi(argv[2]);
+   // std::ifstream ifs = std::ifstream(argv[1]);
+  // nlohmann::json ex_jf = nlohmann::json::parse(ifs);
+  // bool profiler_enabled = ex_jf["profiler_enabled"];
+  // std::string file_path = ex_jf["file_path"];
+  // std::string prof_name = ex_jf["prof_name"];
+  // bool use_threads = ex_jf["use_threads"];
+  // int batch_size = atoi(argv[2]);
+
+  std::string file_path = argv[1];
+  bool profiler_enabled = false;
+  bool use_threads = false;
+  int batch_size = 1024;
+  std::string prof_name = "";
   ARROW_UNUSED(use_threads);
   if (profiler_enabled) ProfilerStart(prof_name.c_str());
   ARROW_ASSIGN_OR_RAISE(
