@@ -28,7 +28,7 @@ namespace fs = arrow::fs;
 namespace cp = arrow::compute;
 
 arrow::Status RunMain(int argc, char** argv) {
-   // std::ifstream ifs = std::ifstream(argv[1]);
+  // std::ifstream ifs = std::ifstream(argv[1]);
   // nlohmann::json ex_jf = nlohmann::json::parse(ifs);
   // bool profiler_enabled = ex_jf["profiler_enabled"];
   // std::string file_path = ex_jf["file_path"];
@@ -51,10 +51,13 @@ arrow::Status RunMain(int argc, char** argv) {
 
   // Read table from file
   auto begin = stats::Time::now();
-  auto pq_file_reader = parquet::ParquetFileReader::Open(input);
-  std::shared_ptr<parquet::FileMetaData> file_metadata = pq_file_reader->metadata();
-  int num_row_groups = file_metadata->num_row_groups();
-  std::cout << "num_row_groups: " << num_row_groups << std::endl;
+  auto reader_fut = parquet::ParquetFileReader::OpenAsync(input);
+  ARROW_ASSIGN_OR_RAISE(std::unique_ptr<parquet::ParquetFileReader> pq_file_reader,
+                        reader_fut.MoveResult());
+
+  // std::shared_ptr<parquet::FileMetaData> file_metadata = pq_file_reader->metadata();
+  // int num_row_groups = file_metadata->num_row_groups();
+  // std::cout << "num_row_groups: " << num_row_groups << std::endl;
   // Get the number of Columns
   std::vector<int> columns;
   parquet::ScanFileContents(columns, batch_size, pq_file_reader.get());
