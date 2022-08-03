@@ -42,7 +42,7 @@
         "ARROW_BUILD_BENCHMARKS_REFERENCE": "ON",
         "ARROW_BUILD_OPENMP_BENCHMARKS": "ON",
         "ARROW_BUILD_DETAILED_BENCHMARKS": "OFF",
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+        "CMAKE_BUILD_TYPE": "RELWITHDEBINFO"
       }
     },
     {
@@ -185,7 +185,22 @@
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ARROW_PARQUET": "ON",
-        "PARQUET_BUILD_EXAMPLES": "OFF",
+        "PARQUET_BUILD_EXAMPLES": "ON",
+        "ARROW_ORC": "ON",
+        "PARQUET_BUILD_EXECUTABLES": "ON"
+      }
+    },
+    {
+      "name": "openformat-relwithdebuginfo",
+      "inherits": [
+        "base-benchmarks",
+        "features-main"
+      ],
+      "displayName": "openformat-relwithdebuginfo",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ARROW_PARQUET": "ON",
+        "PARQUET_BUILD_EXAMPLES": "ON",
         "ARROW_ORC": "ON",
         "PARQUET_BUILD_EXECUTABLES": "ON"
       }
