@@ -941,6 +941,91 @@ void ByteStreamSplitEncoder<DType>::PutSpaced(const T* src, int num_values,
   }
 }
 
+// ----------------------------------------------------------------------
+// FOREncoder<T> implementations
+
+template <typename DType>
+class FOREncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
+ public:
+  using T = typename DType::c_type;
+  using TypedEncoder<DType>::Put;
+
+  explicit FOREncoder(const ColumnDescriptor* descr,
+                      ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
+
+  int64_t EstimatedDataEncodedSize() override;
+  std::shared_ptr<Buffer> FlushValues() override;
+
+  void Put(const T* buffer, int num_values) override;
+  void Put(const ::arrow::Array& values) override;
+  void PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
+                 int64_t valid_bits_offset) override;
+
+ protected:
+  template <typename ArrowType>
+  void PutImpl(const ::arrow::Array& values) {
+    if (values.type_id() != ArrowType::type_id) {
+      throw ParquetException(std::string() + "direct put to " + ArrowType::type_name() +
+                             " from " + values.type()->ToString() + " not supported");
+    }
+    const auto& data = *values.data();
+    PutSpaced(data.GetValues<typename ArrowType::c_type>(1),
+              static_cast<int>(data.length), data.GetValues<uint8_t>(0, 0), data.offset);
+  }
+
+  ::arrow::BufferBuilder sink_;
+  int64_t num_values_in_buffer_;
+};
+
+template <typename DType>
+FOREncoder<DType>::FOREncoder(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
+    : EncoderImpl(descr, Encoding::FOR, pool), sink_{pool}, num_values_in_buffer_{0} {}
+
+template <typename DType>
+int64_t FOREncoder<DType>::EstimatedDataEncodedSize() {
+  return sink_.length();
+}
+
+template <typename DType>
+std::shared_ptr<Buffer> FOREncoder<DType>::FlushValues() {
+  // std::shared_ptr<ResizableBuffer> output_buffer =
+  //     AllocateBuffer(this->memory_pool(), EstimatedDataEncodedSize());
+  // uint8_t* output_buffer_raw = output_buffer->mutable_data();
+  // uint8_t* raw_values = sink_.mutable_data();
+  // ::arrow::util::internal::ByteStreamSplitEncode<T>(raw_values, num_values_in_buffer_,
+  //                                                   output_buffer_raw);
+  // output_buffer_raw = raw_values;
+  // sink_.Reset();
+  num_values_in_buffer_ = 0;
+  std::shared_ptr<Buffer> buffer;
+  PARQUET_THROW_NOT_OK(sink_.Finish(&buffer));
+  return buffer;
+}
+
+template <typename DType>
+void FOREncoder<DType>::Put(const T* buffer, int num_values) {
+  if (num_values > 0) {
+    PARQUET_THROW_NOT_OK(sink_.Append(buffer, num_values * sizeof(T)));
+    num_values_in_buffer_ += num_values;
+  }
+}
+
+template <>
+void FOREncoder<Int32Type>::Put(const ::arrow::Array& values) {
+  throw ParquetException("Put from array not implemented");
+}
+
+template <>
+void FOREncoder<Int64Type>::Put(const ::arrow::Array& values) {
+  throw ParquetException("Put from array not implemented");
+}
+
+template <typename DType>
+void FOREncoder<DType>::PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
+                                  int64_t valid_bits_offset) {
+  throw ParquetException("PutSpaced not implemented");
+}
+
 class DecoderImpl : virtual public Decoder {
  public:
   void SetData(int num_values, const uint8_t* data, int len) override {
@@ -2659,6 +2744,71 @@ int ByteStreamSplitDecoder<DType>::DecodeArrow(
   ParquetException::NYI("DecodeArrow for ByteStreamSplitDecoder");
 }
 
+// ----------------------------------------------------------------------
+// BYTE_STREAM_SPLIT
+
+template <typename DType>
+class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
+ public:
+  using T = typename DType::c_type;
+  explicit FORDecoder(const ColumnDescriptor* descr);
+
+  int Decode(T* buffer, int max_values) override;
+
+  int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
+                  int64_t valid_bits_offset,
+                  typename EncodingTraits<DType>::Accumulator* builder) override;
+
+  int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
+                  int64_t valid_bits_offset,
+                  typename EncodingTraits<DType>::DictAccumulator* builder) override;
+
+  void SetData(int num_values, const uint8_t* data, int len) override;
+};
+
+template <typename DType>
+FORDecoder<DType>::FORDecoder(const ColumnDescriptor* descr)
+    : DecoderImpl(descr, Encoding::FOR) {}
+
+template <typename DType>
+void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
+  DecoderImpl::SetData(num_values, data, len);
+  if (num_values * static_cast<int64_t>(sizeof(T)) > len) {
+    throw ParquetException("Data size too small for number of values (corrupted file?)");
+  }
+  // num_values_in_buffer_ = num_values;
+}
+
+template <typename DType>
+int FORDecoder<DType>::Decode(T* buffer, int max_values) {
+  const int values_to_decode = std::min(num_values_, max_values);
+  // const int num_decoded_previously = num_values_in_buffer_ - num_values_;
+  // const uint8_t* data = data_ + num_decoded_previously;
+
+  // ::arrow::util::internal::ByteStreamSplitDecode<T>(data, values_to_decode,
+  //                                                   num_values_in_buffer_, buffer);
+  int bytes_consumed =
+      DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
+  num_values_ -= values_to_decode;
+  data_ += bytes_consumed;
+  len_ -= bytes_consumed;
+  return values_to_decode;
+}
+
+template <typename DType>
+int FORDecoder<DType>::DecodeArrow(int num_values, int null_count,
+                                   const uint8_t* valid_bits, int64_t valid_bits_offset,
+                                   typename EncodingTraits<DType>::Accumulator* builder) {
+  ParquetException::NYI("DecodeArrow for FORDecoder");
+}
+
+template <typename DType>
+int FORDecoder<DType>::DecodeArrow(
+    int num_values, int null_count, const uint8_t* valid_bits, int64_t valid_bits_offset,
+    typename EncodingTraits<DType>::DictAccumulator* builder) {
+  ParquetException::NYI("DecodeArrow for FORDecoder");
+}
+
 }  // namespace
 
 // ----------------------------------------------------------------------
@@ -2721,6 +2871,16 @@ std::unique_ptr<Encoder> MakeEncoder(Type::type type_num, Encoding::type encodin
         throw ParquetException("BYTE_STREAM_SPLIT only supports FLOAT and DOUBLE");
         break;
     }
+  } else if (encoding == Encoding::FOR) {
+    switch (type_num) {
+      case Type::INT32:
+        return std::unique_ptr<Encoder>(new FOREncoder<Int32Type>(descr, pool));
+      case Type::INT64:
+        return std::unique_ptr<Encoder>(new FOREncoder<Int64Type>(descr, pool));
+      default:
+        throw ParquetException("FOR only supports INT32 and INT64");
+        break;
+    }
   } else {
     ParquetException::NYI("Selected encoding is not supported");
   }
@@ -2781,6 +2941,16 @@ std::unique_ptr<Decoder> MakeDecoder(Type::type type_num, Encoding::type encodin
       return std::unique_ptr<Decoder>(new DeltaLengthByteArrayDecoder(descr));
     }
     throw ParquetException("DELTA_LENGTH_BYTE_ARRAY only supports BYTE_ARRAY");
+  } else if (encoding == Encoding::FOR) {
+    switch (type_num) {
+      case Type::INT32:
+        return std::unique_ptr<Decoder>(new FORDecoder<Int32Type>(descr));
+      case Type::INT64:
+        return std::unique_ptr<Decoder>(new FORDecoder<Int64Type>(descr));
+      default:
+        throw ParquetException("FOR only supports INT32 and INT64");
+        break;
+    }
   } else {
     ParquetException::NYI("Selected encoding is not supported");
   }

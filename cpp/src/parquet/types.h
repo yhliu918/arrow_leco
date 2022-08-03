@@ -465,6 +465,8 @@ struct Encoding {
     DELTA_BYTE_ARRAY = 7,
     RLE_DICTIONARY = 8,
     BYTE_STREAM_SPLIT = 9,
+    FOR = 10,
+    LECO = 11,
     // Should always be last element (except UNKNOWN)
     UNDEFINED = 10,
     UNKNOWN = 999
@@ -477,7 +479,9 @@ struct Encoding {
 // decoding, in which case the data read from the file is DICTIONARY encoded.
 enum class ExposedEncoding {
   NO_ENCODING = 0,  // data is not encoded, i.e. already decoded during reading
-  DICTIONARY = 1
+  DICTIONARY = 1,
+  FOR = 2,
+  LECO = 3
 };
 
 /// \brief Return true if Parquet supports indicated compression type

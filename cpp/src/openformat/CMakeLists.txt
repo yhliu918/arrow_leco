@@ -23,6 +23,7 @@ add_executable(buff_test buffer_builder_test.cc)
 add_executable(raw_reader raw_reader.cc)
 add_executable(raw_reader_v2 raw_reader_v2.cc)
 add_executable(rle_test rle_test.cc)
+add_executable(for for.cc)
 # target_include_directories(parquet-low-level-example PRIVATE low_level_api/)
 # target_include_directories(parquet-low-level-example2 PRIVATE low_level_api/)
 
@@ -49,6 +50,7 @@ target_link_libraries(buff_test ${LIBS})
 target_link_libraries(raw_reader ${LIBS})
 target_link_libraries(raw_reader_v2 ${LIBS})
 target_link_libraries(rle_test ${LIBS})
+target_link_libraries(for ${LIBS})
 
 
 add_dependencies(parquet pq_writer pq_reader orc_reader)
