@@ -55,9 +55,11 @@ arrow::Status RunMain(int argc, char** argv) {
     data.push_back(next);
   }
   srcFile.close();
-  uint8_t num_buffers = data.size() / ROW_GROUP_SIZE;  // only encode 19 * 1M rows now
+  std::cout << "data size: " << data.size() << std::endl;
+  size_t num_buffers = data.size() / ROW_GROUP_SIZE;  // only encode 19 * 1M rows now
+  std::cout << "num buffers: " << num_buffers << std::endl;
   std::vector<uint8_t> buffers[num_buffers];
-  for (int i = 0; i < num_buffers; i++) {
+  for (size_t i = 0; i < num_buffers; i++) {
     buffers[i].resize(DEFAULT_MEM_STREAM_SIZE);
   }
   size_t data_idx = 0;
@@ -117,6 +119,7 @@ arrow::Status RunMain(int argc, char** argv) {
     std::cout << "error, how many got:" << data_idx << std::endl;
   }
   std::cout << "decode time: " << decode_time << std::endl;
+  std::cout << "rows encoded: " << data_idx << std::endl;
   // stats::cout_sec(begin, "RLE decode");
 
   return arrow::Status::OK();

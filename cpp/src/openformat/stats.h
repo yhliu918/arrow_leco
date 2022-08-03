@@ -7,7 +7,7 @@
 namespace stats {
 typedef std::chrono::high_resolution_clock Time;
 typedef std::chrono::milliseconds ms;
-typedef std::chrono::duration<float> fsec;
+typedef std::chrono::duration<double> fsec;
 
 void print_sec(std::chrono::high_resolution_clock::time_point begin, std::string name,
                std::ostream& output) {
