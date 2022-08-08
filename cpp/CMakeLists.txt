@@ -604,6 +604,8 @@ endif()
 message(STATUS "CMAKE_C_FLAGS: ${CMAKE_C_FLAGS}")
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 
+add_subdirectory(Learn-to-Compress)
+include_directories(Learn-to-Compress/headers)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/src)
 include_directories(src)
 

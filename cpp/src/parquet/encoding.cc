@@ -28,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "FOR_integer_template.h"
 #include "arrow/array.h"
 #include "arrow/array/builder_dict.h"
 #include "arrow/stl_allocator.h"
@@ -70,6 +71,8 @@ constexpr int64_t kInMemoryDefaultCapacity = 1024;
 // The Parquet spec isn't very clear whether ByteArray lengths are signed or
 // unsigned, but the Java implementation uses signed ints.
 constexpr size_t kMaxByteArraySize = std::numeric_limits<int32_t>::max();
+
+constexpr size_t kForBlockSize = 1000;
 
 class EncoderImpl : virtual public Encoder {
  public:
@@ -975,11 +978,16 @@ class FOREncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
 
   ::arrow::BufferBuilder sink_;
   int64_t num_values_in_buffer_;
+  Codecset::FOR_int<T> codec_;
+  size_t block_size_;
 };
 
 template <typename DType>
 FOREncoder<DType>::FOREncoder(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
-    : EncoderImpl(descr, Encoding::FOR, pool), sink_{pool}, num_values_in_buffer_{0} {}
+    : EncoderImpl(descr, Encoding::FOR, pool),
+      sink_{pool},
+      num_values_in_buffer_{0},
+      block_size_(kForBlockSize) {}
 
 template <typename DType>
 int64_t FOREncoder<DType>::EstimatedDataEncodedSize() {
@@ -988,18 +996,44 @@ int64_t FOREncoder<DType>::EstimatedDataEncodedSize() {
 
 template <typename DType>
 std::shared_ptr<Buffer> FOREncoder<DType>::FlushValues() {
-  // std::shared_ptr<ResizableBuffer> output_buffer =
-  //     AllocateBuffer(this->memory_pool(), EstimatedDataEncodedSize());
-  // uint8_t* output_buffer_raw = output_buffer->mutable_data();
-  // uint8_t* raw_values = sink_.mutable_data();
+  int blocks = num_values_in_buffer_ / block_size_;
+  if (blocks * block_size_ < num_values_in_buffer_) {
+    blocks++;
+  }
+  std::shared_ptr<ResizableBuffer> output_buffer = AllocateBuffer(
+      this->memory_pool(), 2 * EstimatedDataEncodedSize() + sizeof(uint32_t) * blocks);
+  uint8_t* output_buffer_raw = output_buffer->mutable_data();
+  const uint8_t* raw_values = sink_.data();
+  uint8_t* output_buffer_without_header = output_buffer_raw + sizeof(uint32_t) * blocks;
+  uint64_t totalsize = sizeof(uint32_t) * blocks;
+  *(uint32_t*)output_buffer_raw = 0;
+  output_buffer_raw += sizeof(uint32_t);
+  for (int i = 0; i < blocks; i++) {
+    // std::cout<<"block "<<i<<std::endl;
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_in_buffer_ - (blocks - 1) * block_size_;
+    }
+    // if fixed length segment
+    uint8_t* res =
+        codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values) + i * block_size_,
+                                block_length, output_buffer_without_header, i);
+    uint32_t segment_size = res - output_buffer_without_header;
+    if (i != blocks - 1) {
+      memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
+      output_buffer_raw += sizeof(uint32_t);
+    }
+    output_buffer_without_header = res;
+    totalsize += segment_size;
+  }
+  output_buffer->Resize(totalsize);
   // ::arrow::util::internal::ByteStreamSplitEncode<T>(raw_values, num_values_in_buffer_,
-  //                                                   output_buffer_raw);
-  // output_buffer_raw = raw_values;
-  // sink_.Reset();
+  // output_buffer_raw);
+  sink_.Reset();
   num_values_in_buffer_ = 0;
-  std::shared_ptr<Buffer> buffer;
-  PARQUET_THROW_NOT_OK(sink_.Finish(&buffer));
-  return buffer;
+  // std::shared_ptr<Buffer> buffer;
+  // PARQUET_THROW_NOT_OK(sink_.Finish(&buffer));
+  return std::move(output_buffer);
 }
 
 template <typename DType>
@@ -2751,7 +2785,8 @@ template <typename DType>
 class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
  public:
   using T = typename DType::c_type;
-  explicit FORDecoder(const ColumnDescriptor* descr);
+  explicit FORDecoder(const ColumnDescriptor* descr,
+                      MemoryPool* pool = ::arrow::default_memory_pool());
 
   int Decode(T* buffer, int max_values) override;
 
@@ -2764,11 +2799,18 @@ class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
                   typename EncodingTraits<DType>::DictAccumulator* builder) override;
 
   void SetData(int num_values, const uint8_t* data, int len) override;
+
+ private:
+  Codecset::FOR_int<T> codec_;
+  std::shared_ptr<ResizableBuffer> decoded_buffer_;
+  int num_values_in_buffer_{0};
+  size_t block_size_{kForBlockSize};
+  const T* decoded_values_{nullptr};
 };
 
 template <typename DType>
-FORDecoder<DType>::FORDecoder(const ColumnDescriptor* descr)
-    : DecoderImpl(descr, Encoding::FOR) {}
+FORDecoder<DType>::FORDecoder(const ColumnDescriptor* descr, MemoryPool* pool)
+    : DecoderImpl(descr, Encoding::FOR), decoded_buffer_(AllocateBuffer(pool, 0)) {}
 
 template <typename DType>
 void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
@@ -2776,22 +2818,40 @@ void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
   if (num_values * static_cast<int64_t>(sizeof(T)) > len) {
     throw ParquetException("Data size too small for number of values (corrupted file?)");
   }
-  // num_values_in_buffer_ = num_values;
+  decoded_buffer_->Resize(num_values * sizeof(T));
+  uint8_t* output_buffer_raw = decoded_buffer_->mutable_data();
+  int blocks = num_values / block_size_;
+  if (blocks * block_size_ < num_values) {
+    blocks++;
+  }
+  const uint8_t* input_data = data_ + blocks * sizeof(T);
+  for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values - (blocks - 1) * block_size_;
+    }
+    codec_.decodeArray8(input_data + *(reinterpret_cast<const uint32_t*>(data_) + i),
+                        block_length,
+                        reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+  }
+  num_values_in_buffer_ = num_values;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
 }
 
 template <typename DType>
 int FORDecoder<DType>::Decode(T* buffer, int max_values) {
   const int values_to_decode = std::min(num_values_, max_values);
-  // const int num_decoded_previously = num_values_in_buffer_ - num_values_;
+  const int num_decoded_previously = num_values_in_buffer_ - num_values_;
   // const uint8_t* data = data_ + num_decoded_previously;
 
   // ::arrow::util::internal::ByteStreamSplitDecode<T>(data, values_to_decode,
   //                                                   num_values_in_buffer_, buffer);
-  int bytes_consumed =
-      DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
+  // int bytes_consumed =
+  //     DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
+  memcpy(buffer, decoded_values_ + num_decoded_previously, values_to_decode * sizeof(T));
   num_values_ -= values_to_decode;
-  data_ += bytes_consumed;
-  len_ -= bytes_consumed;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
   return values_to_decode;
 }
 

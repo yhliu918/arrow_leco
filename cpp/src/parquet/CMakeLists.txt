@@ -210,7 +210,7 @@ else()
 endif()
 
 if(NOT PARQUET_MINIMAL_DEPENDENCY)
-  set(PARQUET_SHARED_LINK_LIBS arrow_shared)
+  set(PARQUET_SHARED_LINK_LIBS arrow_shared leco)
 
   # These are libraries that we will link privately with parquet_shared (as they
   # do not need to be linked transitively by other linkers)

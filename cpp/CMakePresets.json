@@ -206,6 +206,38 @@
       }
     },
     {
+      "name": "leco-relwithdebuginfo",
+      "inherits": [
+        "base-benchmarks",
+        "features-main"
+      ],
+      "displayName": "leco-relwithdebuginfo",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ARROW_PARQUET": "ON",
+        "PARQUET_BUILD_EXAMPLES": "ON",
+        "ARROW_ORC": "OFF",
+        "PARQUET_BUILD_EXECUTABLES": "ON",
+        "BUILD_WARNING_LEVEL": "PRODUCTION"
+      }
+    },
+    {
+      "name": "leco-debug",
+      "inherits": [
+        "base-debug",
+        "features-main"
+      ],
+      "displayName": "leco-debug",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ARROW_PARQUET": "ON",
+        "PARQUET_BUILD_EXAMPLES": "ON",
+        "ARROW_ORC": "OFF",
+        "PARQUET_BUILD_EXECUTABLES": "ON",
+        "BUILD_WARNING_LEVEL": "PRODUCTION"
+      }
+    },
+    {
       "name": "ninja-debug-basic",
       "inherits": [
         "base-debug",
