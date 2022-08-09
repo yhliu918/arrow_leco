@@ -30,7 +30,8 @@
 
 using namespace arrow;
 
-const int DATA_SIZE = 10;
+const int DATA_SIZE = 1024 * 1024 * 150;
+const int BATCH_SIZE = DATA_SIZE;
 
 arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
   std::vector<int32_t> data;
@@ -44,11 +45,13 @@ arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
   // seems that implement this func is enough for non-null case
   encoder->Put(&data[0], DATA_SIZE);
   auto buffer = encoder->FlushValues();
+  std::vector<int32_t> decoded_data(DATA_SIZE);
+  auto begin = stats::Time::now();
   auto decoder = parquet::MakeTypedDecoder<parquet::Int32Type>(
       encoding, /*ColumnDescriptor* descr=*/nullptr);
-  int32_t decoded_data[DATA_SIZE];
   decoder->SetData(DATA_SIZE, buffer->data(), static_cast<int>(buffer->size()));
-  decoder->Decode(decoded_data, DATA_SIZE);
+  decoder->Decode(&decoded_data[0], DATA_SIZE);
+  stats::cout_sec(begin, "decode ");
   for (size_t i = 0; i < DATA_SIZE; ++i) {
     if (data[i] != decoded_data[i]) {
       std::cout << data[i] << " " << decoded_data[i] << std::endl;
@@ -58,8 +61,14 @@ arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
 }
 
 arrow::Status full_scan_test(parquet::Encoding::type encoding) {
-  const std::vector<int32_t> a = {1, 2, 3, 4, 5};
-  const std::vector<int64_t> b = {5, 4, 3, 2, 1};
+  std::vector<int32_t> a;
+  for (int32_t i = 0; i < DATA_SIZE; ++i) {
+    a.push_back(i);
+  }
+  std::vector<int64_t> b;
+  for (int32_t i = DATA_SIZE; i > 0; --i) {
+    b.push_back(i);
+  }
 
   auto schema = arrow::schema(
       {arrow::field("a", arrow::int32()), arrow::field("b", arrow::int64())});
@@ -78,7 +87,7 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
   std::shared_ptr<arrow::io::FileOutputStream> outfile;
   PARQUET_ASSIGN_OR_THROW(outfile,
                           arrow::io::FileOutputStream::Open("/tmp/test.parquet"));
-  // FIXME: hard code for now
+
   uint32_t row_group_size = 1 * 1024 * 1024;         // 64M / 10
   uint32_t dictionary_pages_size = 1 * 1024 * 1024;  // 64M * 0.03
   arrow::Compression::type codec = arrow::Compression::UNCOMPRESSED;
@@ -109,16 +118,17 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
   // std::cout << "num_row_groups: " << num_row_groups << std::endl;
   // Get the number of Columns
   std::vector<int> columns;
-  int batch_size = 1024;
-  parquet::ScanFileContents(columns, batch_size, pq_file_reader.get());
+  parquet::ScanFileContents(columns, BATCH_SIZE, pq_file_reader.get());
   return arrow::Status::OK();
 }
 
 arrow::Status RunMain(int argc, char** argv) {
   ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::PLAIN));
   ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::FOR));
-  ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::PLAIN));
-  ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::FOR));
+  ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::LECO));
+  // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::PLAIN));
+  // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::FOR));
+  // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::LECO));
   return arrow::Status::OK();
 }
 

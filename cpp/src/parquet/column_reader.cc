@@ -828,7 +828,12 @@ class ColumnReaderImplBase {
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
-
+        case Encoding::LECO: {
+          auto decoder = MakeTypedDecoder<DType>(Encoding::LECO, descr_);
+          current_decoder_ = decoder.get();
+          decoders_[static_cast<int>(encoding)] = std::move(decoder);
+          break;
+        }
         default:
           throw ParquetException("Unknown encoding type.");
       }

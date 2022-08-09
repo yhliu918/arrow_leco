@@ -52,6 +52,7 @@
 #include "parquet/platform.h"
 #include "parquet/schema.h"
 #include "parquet/types.h"
+#include "piecewise_fix_integer_template.h"
 
 namespace bit_util = arrow::bit_util;
 
@@ -72,7 +73,7 @@ constexpr int64_t kInMemoryDefaultCapacity = 1024;
 // unsigned, but the Java implementation uses signed ints.
 constexpr size_t kMaxByteArraySize = std::numeric_limits<int32_t>::max();
 
-constexpr size_t kForBlockSize = 1000;
+constexpr size_t kForBlockSize = 2000;
 
 class EncoderImpl : virtual public Encoder {
  public:
@@ -1026,7 +1027,7 @@ std::shared_ptr<Buffer> FOREncoder<DType>::FlushValues() {
     output_buffer_without_header = res;
     totalsize += segment_size;
   }
-  output_buffer->Resize(totalsize);
+  ARROW_CHECK_OK(output_buffer->Resize(totalsize));
   // ::arrow::util::internal::ByteStreamSplitEncode<T>(raw_values, num_values_in_buffer_,
   // output_buffer_raw);
   sink_.Reset();
@@ -1057,6 +1058,122 @@ void FOREncoder<Int64Type>::Put(const ::arrow::Array& values) {
 template <typename DType>
 void FOREncoder<DType>::PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
                                   int64_t valid_bits_offset) {
+  throw ParquetException("PutSpaced not implemented");
+}
+
+// ----------------------------------------------------------------------
+// LecoEncoder<T> implementations
+
+template <typename DType>
+class LecoEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
+ public:
+  using T = typename DType::c_type;
+  using TypedEncoder<DType>::Put;
+
+  explicit LecoEncoder(const ColumnDescriptor* descr,
+                       ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
+
+  int64_t EstimatedDataEncodedSize() override;
+  std::shared_ptr<Buffer> FlushValues() override;
+
+  void Put(const T* buffer, int num_values) override;
+  void Put(const ::arrow::Array& values) override;
+  void PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
+                 int64_t valid_bits_offset) override;
+
+ protected:
+  template <typename ArrowType>
+  void PutImpl(const ::arrow::Array& values) {
+    if (values.type_id() != ArrowType::type_id) {
+      throw ParquetException(std::string() + "direct put to " + ArrowType::type_name() +
+                             " from " + values.type()->ToString() + " not supported");
+    }
+    const auto& data = *values.data();
+    PutSpaced(data.GetValues<typename ArrowType::c_type>(1),
+              static_cast<int>(data.length), data.GetValues<uint8_t>(0, 0), data.offset);
+  }
+
+  ::arrow::BufferBuilder sink_;
+  int64_t num_values_in_buffer_;
+  Codecset::Leco_int<T> codec_;
+  size_t block_size_;
+};
+
+template <typename DType>
+LecoEncoder<DType>::LecoEncoder(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
+    : EncoderImpl(descr, Encoding::FOR, pool),
+      sink_{pool},
+      num_values_in_buffer_{0},
+      block_size_(kForBlockSize) {}
+
+template <typename DType>
+int64_t LecoEncoder<DType>::EstimatedDataEncodedSize() {
+  return sink_.length();
+}
+
+template <typename DType>
+std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
+  int blocks = num_values_in_buffer_ / block_size_;
+  if (blocks * block_size_ < num_values_in_buffer_) {
+    blocks++;
+  }
+  std::shared_ptr<ResizableBuffer> output_buffer = AllocateBuffer(
+      this->memory_pool(), 2 * EstimatedDataEncodedSize() + sizeof(uint32_t) * blocks);
+  uint8_t* output_buffer_raw = output_buffer->mutable_data();
+  const uint8_t* raw_values = sink_.data();
+  uint8_t* output_buffer_without_header = output_buffer_raw + sizeof(uint32_t) * blocks;
+  uint64_t totalsize = sizeof(uint32_t) * blocks;
+  *(uint32_t*)output_buffer_raw = 0;
+  output_buffer_raw += sizeof(uint32_t);
+  for (int i = 0; i < blocks; i++) {
+    // std::cout<<"block "<<i<<std::endl;
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_in_buffer_ - (blocks - 1) * block_size_;
+    }
+    // if fixed length segment
+    uint8_t* res =
+        codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values) + i * block_size_,
+                                block_length, output_buffer_without_header, i);
+    uint32_t segment_size = res - output_buffer_without_header;
+    if (i != blocks - 1) {
+      memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
+      output_buffer_raw += sizeof(uint32_t);
+    }
+    output_buffer_without_header = res;
+    totalsize += segment_size;
+  }
+  ARROW_CHECK_OK(output_buffer->Resize(totalsize));
+  // ::arrow::util::internal::ByteStreamSplitEncode<T>(raw_values, num_values_in_buffer_,
+  // output_buffer_raw);
+  sink_.Reset();
+  num_values_in_buffer_ = 0;
+  // std::shared_ptr<Buffer> buffer;
+  // PARQUET_THROW_NOT_OK(sink_.Finish(&buffer));
+  return std::move(output_buffer);
+}
+
+template <typename DType>
+void LecoEncoder<DType>::Put(const T* buffer, int num_values) {
+  if (num_values > 0) {
+    PARQUET_THROW_NOT_OK(sink_.Append(buffer, num_values * sizeof(T)));
+    num_values_in_buffer_ += num_values;
+  }
+}
+
+template <>
+void LecoEncoder<Int32Type>::Put(const ::arrow::Array& values) {
+  throw ParquetException("Put from array not implemented");
+}
+
+template <>
+void LecoEncoder<Int64Type>::Put(const ::arrow::Array& values) {
+  throw ParquetException("Put from array not implemented");
+}
+
+template <typename DType>
+void LecoEncoder<DType>::PutSpaced(const T* src, int num_values,
+                                   const uint8_t* valid_bits, int64_t valid_bits_offset) {
   throw ParquetException("PutSpaced not implemented");
 }
 
@@ -2779,7 +2896,7 @@ int ByteStreamSplitDecoder<DType>::DecodeArrow(
 }
 
 // ----------------------------------------------------------------------
-// BYTE_STREAM_SPLIT
+// FOR Decoder
 
 template <typename DType>
 class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
@@ -2812,43 +2929,75 @@ template <typename DType>
 FORDecoder<DType>::FORDecoder(const ColumnDescriptor* descr, MemoryPool* pool)
     : DecoderImpl(descr, Encoding::FOR), decoded_buffer_(AllocateBuffer(pool, 0)) {}
 
+// template <typename DType>
+// void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
+//   DecoderImpl::SetData(num_values, data, len);
+//   ARROW_CHECK_OK(decoded_buffer_->Resize(num_values * sizeof(T)));
+//   uint8_t* output_buffer_raw = decoded_buffer_->mutable_data();
+//   int blocks = num_values / block_size_;
+//   if (blocks * block_size_ < num_values) {
+//     blocks++;
+//   }
+//   const uint8_t* input_data = data_ + blocks * sizeof(T);
+//   for (int i = 0; i < blocks; i++) {
+//     int block_length = block_size_;
+//     if (i == blocks - 1) {
+//       block_length = num_values - (blocks - 1) * block_size_;
+//     }
+//     input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+//     codec_.decodeArray8(input_data, block_length,
+//                         reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+//   }
+//   num_values_in_buffer_ = num_values;
+//   decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+// }
+
+// template <typename DType>
+// int FORDecoder<DType>::Decode(T* buffer, int max_values) {
+//   const int values_to_decode = std::min(num_values_, max_values);
+//   const int num_decoded_previously = num_values_in_buffer_ - num_values_;
+//   // const uint8_t* data = data_ + num_decoded_previously;
+
+//   // ::arrow::util::internal::ByteStreamSplitDecode<T>(data, values_to_decode,
+//   //                                                   num_values_in_buffer_, buffer);
+//   // int bytes_consumed =
+//   //     DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
+//   memcpy(buffer, decoded_values_ + num_decoded_previously, values_to_decode * sizeof(T));
+//   num_values_ -= values_to_decode;
+//   // data_ += bytes_consumed;
+//   // len_ -= bytes_consumed;
+//   return values_to_decode;
+// }
+
 template <typename DType>
 void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
   DecoderImpl::SetData(num_values, data, len);
-  if (num_values * static_cast<int64_t>(sizeof(T)) > len) {
-    throw ParquetException("Data size too small for number of values (corrupted file?)");
+}
+
+template <typename DType>
+int FORDecoder<DType>::Decode(T* buffer, int max_values) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
   }
-  decoded_buffer_->Resize(num_values * sizeof(T));
-  uint8_t* output_buffer_raw = decoded_buffer_->mutable_data();
-  int blocks = num_values / block_size_;
-  if (blocks * block_size_ < num_values) {
+  uint8_t* output_buffer_raw = reinterpret_cast<uint8_t*>(buffer);
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
     blocks++;
   }
   const uint8_t* input_data = data_ + blocks * sizeof(T);
   for (int i = 0; i < blocks; i++) {
     int block_length = block_size_;
     if (i == blocks - 1) {
-      block_length = num_values - (blocks - 1) * block_size_;
+      block_length = num_values_ - (blocks - 1) * block_size_;
     }
-    codec_.decodeArray8(input_data + *(reinterpret_cast<const uint32_t*>(data_) + i),
-                        block_length,
+    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    codec_.decodeArray8(input_data, block_length,
                         reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
   }
-  num_values_in_buffer_ = num_values;
+  num_values_in_buffer_ = num_values_;
   decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
-}
-
-template <typename DType>
-int FORDecoder<DType>::Decode(T* buffer, int max_values) {
   const int values_to_decode = std::min(num_values_, max_values);
-  const int num_decoded_previously = num_values_in_buffer_ - num_values_;
-  // const uint8_t* data = data_ + num_decoded_previously;
-
-  // ::arrow::util::internal::ByteStreamSplitDecode<T>(data, values_to_decode,
-  //                                                   num_values_in_buffer_, buffer);
-  // int bytes_consumed =
-  //     DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
-  memcpy(buffer, decoded_values_ + num_decoded_previously, values_to_decode * sizeof(T));
   num_values_ -= values_to_decode;
   // data_ += bytes_consumed;
   // len_ -= bytes_consumed;
@@ -2867,6 +3016,129 @@ int FORDecoder<DType>::DecodeArrow(
     int num_values, int null_count, const uint8_t* valid_bits, int64_t valid_bits_offset,
     typename EncodingTraits<DType>::DictAccumulator* builder) {
   ParquetException::NYI("DecodeArrow for FORDecoder");
+}
+
+// ----------------------------------------------------------------------
+// Leco Decoder
+
+template <typename DType>
+class LecoDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
+ public:
+  using T = typename DType::c_type;
+  explicit LecoDecoder(const ColumnDescriptor* descr,
+                       MemoryPool* pool = ::arrow::default_memory_pool());
+
+  int Decode(T* buffer, int max_values) override;
+
+  int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
+                  int64_t valid_bits_offset,
+                  typename EncodingTraits<DType>::Accumulator* builder) override;
+
+  int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
+                  int64_t valid_bits_offset,
+                  typename EncodingTraits<DType>::DictAccumulator* builder) override;
+
+  void SetData(int num_values, const uint8_t* data, int len) override;
+
+ private:
+  Codecset::Leco_int<T> codec_;
+  std::shared_ptr<ResizableBuffer> decoded_buffer_;
+  int num_values_in_buffer_{0};
+  size_t block_size_{kForBlockSize};
+  const T* decoded_values_{nullptr};
+};
+
+template <typename DType>
+LecoDecoder<DType>::LecoDecoder(const ColumnDescriptor* descr, MemoryPool* pool)
+    : DecoderImpl(descr, Encoding::FOR), decoded_buffer_(AllocateBuffer(pool, 0)) {}
+
+// template <typename DType>
+// void LecoDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
+//   DecoderImpl::SetData(num_values, data, len);
+//   ARROW_CHECK_OK(decoded_buffer_->Resize(num_values * sizeof(T)));
+//   uint8_t* output_buffer_raw = decoded_buffer_->mutable_data();
+//   int blocks = num_values / block_size_;
+//   if (blocks * block_size_ < num_values) {
+//     blocks++;
+//   }
+//   const uint8_t* input_data = data_ + blocks * sizeof(T);
+//   for (int i = 0; i < blocks; i++) {
+//     int block_length = block_size_;
+//     if (i == blocks - 1) {
+//       block_length = num_values - (blocks - 1) * block_size_;
+//     }
+//     input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+//     codec_.decodeArray8(input_data, block_length,
+//                         reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+//   }
+//   num_values_in_buffer_ = num_values;
+//   decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+// }
+
+// template <typename DType>
+// int LecoDecoder<DType>::Decode(T* buffer, int max_values) {
+//   const int values_to_decode = std::min(num_values_, max_values);
+//   const int num_decoded_previously = num_values_in_buffer_ - num_values_;
+//   // const uint8_t* data = data_ + num_decoded_previously;
+
+//   // ::arrow::util::internal::ByteStreamSplitDecode<T>(data, values_to_decode,
+//   //                                                   num_values_in_buffer_, buffer);
+//   // int bytes_consumed =
+//   //     DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
+//   memcpy(buffer, decoded_values_ + num_decoded_previously, values_to_decode *
+//   sizeof(T)); num_values_ -= values_to_decode;
+//   // data_ += bytes_consumed;
+//   // len_ -= bytes_consumed;
+//   return values_to_decode;
+// }
+
+template <typename DType>
+void LecoDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
+  DecoderImpl::SetData(num_values, data, len);
+}
+
+template <typename DType>
+int LecoDecoder<DType>::Decode(T* buffer, int max_values) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  uint8_t* output_buffer_raw = reinterpret_cast<uint8_t*>(buffer);
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  const uint8_t* input_data = data_ + blocks * sizeof(T);
+  for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_ - (blocks - 1) * block_size_;
+    }
+    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    codec_.decodeArray8(input_data, block_length,
+                        reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+  }
+  num_values_in_buffer_ = num_values_;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return values_to_decode;
+}
+
+template <typename DType>
+int LecoDecoder<DType>::DecodeArrow(
+    int num_values, int null_count, const uint8_t* valid_bits, int64_t valid_bits_offset,
+    typename EncodingTraits<DType>::Accumulator* builder) {
+  ParquetException::NYI("DecodeArrow for LecoDecoder");
+}
+
+template <typename DType>
+int LecoDecoder<DType>::DecodeArrow(
+    int num_values, int null_count, const uint8_t* valid_bits, int64_t valid_bits_offset,
+    typename EncodingTraits<DType>::DictAccumulator* builder) {
+  ParquetException::NYI("DecodeArrow for LecoDecoder");
 }
 
 }  // namespace
@@ -2941,6 +3213,16 @@ std::unique_ptr<Encoder> MakeEncoder(Type::type type_num, Encoding::type encodin
         throw ParquetException("FOR only supports INT32 and INT64");
         break;
     }
+  } else if (encoding == Encoding::LECO) {
+    switch (type_num) {
+      case Type::INT32:
+        return std::unique_ptr<Encoder>(new LecoEncoder<Int32Type>(descr, pool));
+      case Type::INT64:
+        return std::unique_ptr<Encoder>(new LecoEncoder<Int64Type>(descr, pool));
+      default:
+        throw ParquetException("FOR only supports INT32 and INT64");
+        break;
+    }
   } else {
     ParquetException::NYI("Selected encoding is not supported");
   }
@@ -3009,6 +3291,16 @@ std::unique_ptr<Decoder> MakeDecoder(Type::type type_num, Encoding::type encodin
         return std::unique_ptr<Decoder>(new FORDecoder<Int64Type>(descr));
       default:
         throw ParquetException("FOR only supports INT32 and INT64");
+        break;
+    }
+  } else if (encoding == Encoding::LECO) {
+    switch (type_num) {
+      case Type::INT32:
+        return std::unique_ptr<Decoder>(new LecoDecoder<Int32Type>(descr));
+      case Type::INT64:
+        return std::unique_ptr<Decoder>(new LecoDecoder<Int64Type>(descr));
+      default:
+        throw ParquetException("Leco only supports INT32 and INT64");
         break;
     }
   } else {
