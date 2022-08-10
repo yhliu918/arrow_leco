@@ -173,6 +173,11 @@ class TypedColumnReader : public ColumnReader {
   // @returns: actual number of levels read (see values_read for number of values read)
   virtual int64_t ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                             T* values, int64_t* values_read) = 0;
+  // virtual int64_t ReadBatchWithSelVec(int64_t batch_size, int16_t* def_levels,
+  //                                     int16_t* rep_levels, T* values,
+  //                                     int64_t* values_read,
+  //                                     std::vector<uint32_t>& bit_pos,
+  //                                     int64_t true_size) = 0;
 
   /// Read a batch of repetition levels, definition levels, and values from the
   /// column and leave spaces for null entries on the lowest level in the values

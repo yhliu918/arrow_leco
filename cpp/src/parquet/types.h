@@ -468,7 +468,7 @@ struct Encoding {
     FOR = 10,
     LECO = 11,
     // Should always be last element (except UNKNOWN)
-    UNDEFINED = 10,
+    UNDEFINED = 12,
     UNKNOWN = 999
   };
 };

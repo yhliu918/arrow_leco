@@ -131,6 +131,10 @@ std::string EncodingToString(Encoding::type t) {
       return "RLE_DICTIONARY";
     case Encoding::BYTE_STREAM_SPLIT:
       return "BYTE_STREAM_SPLIT";
+    case Encoding::FOR:
+      return "FOR";
+    case Encoding::LECO:
+      return "LECO";
     default:
       return "UNKNOWN";
   }
