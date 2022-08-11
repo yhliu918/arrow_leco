@@ -139,6 +139,10 @@ void ParquetFilePrinter::DebugPrint(std::ostream& stream, std::list<int> selecte
              << "  Uncompressed Size: " << column_chunk->total_uncompressed_size()
              << ", Compressed Size: " << column_chunk->total_compressed_size()
              << std::endl;
+      stream << "  Page count: " << std::endl;
+      for (auto stats : column_chunk->encoding_stats()) {
+        stream << "    " << stats.count << std::endl;
+      }
     }
 
     if (!print_values) {

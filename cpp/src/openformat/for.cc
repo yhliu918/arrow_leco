@@ -30,8 +30,15 @@
 
 using namespace arrow;
 
-const int DATA_SIZE = 1024 * 1024 * 150;
+const int DATA_SIZE = 1024 * 1024 * 200;
 const int BATCH_SIZE = DATA_SIZE;
+const uint32_t ROW_GROUP_SIZE = 64 * 1024 * 1024;
+
+std::string get_pq_name(parquet::Encoding::type encoding) {
+  return "./encoding" + std::to_string(encoding) + "_rowgroup" +
+         std::to_string(ROW_GROUP_SIZE) + "_datasize" + std::to_string(DATA_SIZE) +
+         ".parquet";
+}
 
 arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
   std::vector<int32_t> data;
@@ -43,7 +50,10 @@ arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
       encoding,
       /*use_dictionary=*/false, /*ColumnDescriptor* descr=*/nullptr);
   // seems that implement this func is enough for non-null case
-  encoder->Put(&data[0], DATA_SIZE);
+  for (int32_t i = 0; i < DATA_SIZE / 1024; ++i) {
+    encoder->Put(&data[i * 1024], 1024);
+  }
+  encoder->Put(&data[DATA_SIZE - DATA_SIZE % 1024], DATA_SIZE % 1024);
   auto buffer = encoder->FlushValues();
   std::vector<int32_t> decoded_data(DATA_SIZE);
   auto begin = stats::Time::now();
@@ -61,23 +71,22 @@ arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
 }
 
 arrow::Status full_scan_test(parquet::Encoding::type encoding) {
-  std::string parquet_name = "./test" + std::to_string(encoding) + ".parquet";
   std::vector<int32_t> a;
   for (int32_t i = 0; i < DATA_SIZE; ++i) {
     a.push_back(i);
   }
-  std::vector<int64_t> b;
+  std::vector<int32_t> b;
   for (int32_t i = DATA_SIZE; i > 0; --i) {
     b.push_back(i);
   }
 
   auto schema = arrow::schema(
-      {arrow::field("a", arrow::int32()), arrow::field("b", arrow::int64())});
+      {arrow::field("a", arrow::int32()), arrow::field("b", arrow::int32())});
 
   arrow::Int32Builder aBuilder;
   PARQUET_THROW_NOT_OK(aBuilder.AppendValues(a));
 
-  arrow::Int64Builder bBuilder;
+  arrow::Int32Builder bBuilder;
   PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
 
   std::shared_ptr<arrow::Array> array_a, array_b;
@@ -85,10 +94,7 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
   ARROW_ASSIGN_OR_RAISE(array_b, bBuilder.Finish());
 
   std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {array_a, array_b});
-  std::shared_ptr<arrow::io::FileOutputStream> outfile;
-  PARQUET_ASSIGN_OR_THROW(outfile, arrow::io::FileOutputStream::Open(parquet_name));
-
-  uint32_t row_group_size = 1 * 1024 * 1024;         // 64M / 10
+  uint32_t row_group_size = ROW_GROUP_SIZE;          // 64M / 10
   uint32_t dictionary_pages_size = 1 * 1024 * 1024;  // 64M * 0.03
   arrow::Compression::type codec = arrow::Compression::UNCOMPRESSED;
   std::shared_ptr<parquet::WriterProperties> properties =
@@ -100,6 +106,13 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
           ->version(parquet::ParquetVersion::PARQUET_2_LATEST)
           ->data_page_version(parquet::ParquetDataPageVersion::V2)
           ->build();
+
+  std::shared_ptr<arrow::io::FileOutputStream> outfile;
+  std::string parquet_name = "./encoding" + std::to_string(encoding) + "_rowgroup" +
+                             std::to_string(row_group_size) + "_datasize" +
+                             std::to_string(DATA_SIZE) + ".parquet";
+  PARQUET_ASSIGN_OR_THROW(outfile, arrow::io::FileOutputStream::Open(parquet_name));
+
   PARQUET_THROW_NOT_OK(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(),
                                                   outfile, row_group_size, properties));
   PARQUET_THROW_NOT_OK(outfile->Close());
@@ -115,13 +128,13 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
                         reader_fut.MoveResult());
 
   std::vector<int> columns;
-  parquet::ScanFileContents(columns, BATCH_SIZE, pq_file_reader.get());
+  parquet::ScanFileContentsCheck(columns, BATCH_SIZE, pq_file_reader.get(), a, b);
   return arrow::Status::OK();
 }
 
 arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int64_t>& a,
                        std::vector<int64_t>& b) {
-  std::string parquet_name = "./test" + std::to_string(encoding) + ".parquet";
+  std::string parquet_name = get_pq_name(encoding);
 
   auto schema = arrow::schema(
       {arrow::field("a", arrow::int64()), arrow::field("b", arrow::int64())});
@@ -140,7 +153,7 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int64_t>& a
   std::shared_ptr<arrow::io::FileOutputStream> outfile;
   PARQUET_ASSIGN_OR_THROW(outfile, arrow::io::FileOutputStream::Open(parquet_name));
 
-  uint32_t row_group_size = 1 * 1024 * 1024;         // 64M / 10
+  uint32_t row_group_size = ROW_GROUP_SIZE;          // 64M / 10
   uint32_t dictionary_pages_size = 1 * 1024 * 1024;  // 64M * 0.03
   arrow::Compression::type codec = arrow::Compression::UNCOMPRESSED;
   std::shared_ptr<parquet::WriterProperties> properties =
@@ -160,7 +173,7 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int64_t>& a
 
 arrow::Status pure_scan(parquet::Encoding::type encoding) {
   auto begin = stats::Time::now();
-  std::string parquet_name = "./test" + std::to_string(encoding) + ".parquet";
+  std::string parquet_name = get_pq_name(encoding);
   ARROW_ASSIGN_OR_RAISE(auto input, arrow::io::ReadableFile::Open(
                                         parquet_name, arrow::default_memory_pool()));
 
@@ -185,7 +198,7 @@ arrow::Status RunMain(int argc, char** argv) {
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::LECO));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::PLAIN));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::FOR));
-  ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::LECO));
+  // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::LECO));
   if (encoding == "PLAIN") {
     ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::PLAIN));
   } else if (encoding == "FOR") {
@@ -195,6 +208,7 @@ arrow::Status RunMain(int argc, char** argv) {
   } else {
     std::cout << "wrong encoding" << std::endl;
   }
+  system("cat /proc/$PPID/io");
   return arrow::Status::OK();
 }
 

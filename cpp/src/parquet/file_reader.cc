@@ -874,4 +874,72 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
   return total_rows[0];
 }
 
+int64_t ScanFileContentsCheck(std::vector<int> columns, const int32_t column_batch_size,
+                              ParquetFileReader* reader, std::vector<int32_t>& a,
+                              std::vector<int32_t>& b) {
+  std::vector<int16_t> rep_levels(column_batch_size);
+  std::vector<int16_t> def_levels(column_batch_size);
+
+  int num_columns = static_cast<int>(columns.size());
+
+  // columns are not specified explicitly. Add all columns
+  if (columns.size() == 0) {
+    num_columns = reader->metadata()->num_columns();
+    columns.resize(num_columns);
+    for (int i = 0; i < num_columns; i++) {
+      columns[i] = i;
+    }
+  }
+  if (num_columns == 0) {
+    // If we still have no columns(none in file), return early. The remainder of function
+    // expects there to be at least one column.
+    return 0;
+  }
+
+  std::vector<int64_t> total_rows(num_columns, 0);
+  size_t idx_a = 0, idx_b = 0;
+  for (int r = 0; r < reader->metadata()->num_row_groups(); ++r) {
+    auto group_reader = reader->RowGroup(r);
+    int col = 0;
+    for (auto i : columns) {
+      std::shared_ptr<ColumnReader> col_reader = group_reader->Column(i);
+      size_t value_byte_size = GetTypeByteSize(col_reader->descr()->physical_type());
+      std::vector<uint8_t> values(column_batch_size * value_byte_size);
+
+      int64_t values_read = 0;
+      while (col_reader->HasNext()) {
+        int64_t levels_read =
+            ScanAllValues(column_batch_size, def_levels.data(), rep_levels.data(),
+                          values.data(), &values_read, col_reader.get());
+        // logic to check
+        if (col_reader->descr()->name() == "a") {
+          for (int64_t i = 0; i < values_read; i++) {
+            if (a[idx_a++] != *reinterpret_cast<int32_t*>(values.data() + i * 4)) {
+              throw ParquetException("Parquet error: Values do not match");
+            }
+          }
+        } else {
+          for (int64_t i = 0; i < values_read; i++) {
+            if (b[idx_b++] != *reinterpret_cast<int32_t*>(values.data() + i * 4)) {
+              throw ParquetException("Parquet error: Values do not match");
+            }
+          }
+        }
+      }
+      col++;
+    }
+  }
+
+  for (int i = 1; i < num_columns; ++i) {
+    if (total_rows[0] != total_rows[i]) {
+      throw ParquetException("Parquet error: Total rows among columns do not match");
+    }
+  }
+  if (idx_a != a.size() || idx_b != b.size()) {
+    throw ParquetException("Parquet error: Size of values do not match");
+  }
+
+  return total_rows[0];
+}
+
 }  // namespace parquet

@@ -184,5 +184,9 @@ ReadMetaData(const std::shared_ptr<::arrow::io::RandomAccessFile>& source);
 PARQUET_EXPORT
 int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
                          ParquetFileReader* reader);
+PARQUET_EXPORT
+int64_t ScanFileContentsCheck(std::vector<int> columns, const int32_t column_batch_size,
+                              ParquetFileReader* reader, std::vector<int32_t>& a,
+                              std::vector<int32_t>& b);
 
 }  // namespace parquet
