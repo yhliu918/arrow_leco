@@ -206,12 +206,12 @@
       }
     },
     {
-      "name": "leco-relwithdebuginfo",
+      "name": "leco-relwithdebinfo",
       "inherits": [
         "base-benchmarks",
         "features-main"
       ],
-      "displayName": "leco-relwithdebuginfo",
+      "displayName": "leco-relwithdebinfo",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ARROW_PARQUET": "ON",
