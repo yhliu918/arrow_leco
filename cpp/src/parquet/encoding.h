@@ -279,6 +279,11 @@ class TypedDecoder : virtual public Decoder {
   /// at the end of the current data page.
   virtual int Decode(T* buffer, int max_values) = 0;
 
+  virtual int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
+                           std::vector<uint32_t>& bitpos) {
+    ParquetException::NYI("DecodeBitpos not supported for TypedDecoder base class");
+  }
+
   /// \brief Decode the values in this data page but leave spaces for null entries.
   ///
   /// \param[in] buffer destination for decoded values

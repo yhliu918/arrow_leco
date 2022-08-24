@@ -222,6 +222,22 @@
       }
     },
     {
+      "name": "leco-release",
+      "inherits": [
+        "base-release",
+        "features-main"
+      ],
+      "displayName": "leco-release",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ARROW_PARQUET": "ON",
+        "PARQUET_BUILD_EXAMPLES": "ON",
+        "ARROW_ORC": "OFF",
+        "PARQUET_BUILD_EXECUTABLES": "ON",
+        "BUILD_WARNING_LEVEL": "PRODUCTION"
+      }
+    },
+    {
       "name": "leco-debug",
       "inherits": [
         "base-debug",

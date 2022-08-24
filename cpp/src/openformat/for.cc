@@ -33,11 +33,12 @@ using namespace arrow;
 const int DATA_SIZE = 1024 * 1024 * 200;
 const int BATCH_SIZE = DATA_SIZE;
 const uint32_t ROW_GROUP_SIZE = 64 * 1024 * 1024;
+std::string source_file;
 
 std::string get_pq_name(parquet::Encoding::type encoding) {
   return "./encoding" + std::to_string(encoding) + "_rowgroup" +
          std::to_string(ROW_GROUP_SIZE) + "_datasize" + std::to_string(DATA_SIZE) +
-         ".parquet";
+         source_file + ".parquet";
 }
 
 arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
@@ -132,17 +133,17 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
   return arrow::Status::OK();
 }
 
-arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int64_t>& a,
-                       std::vector<int64_t>& b) {
+arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int32_t>& a,
+                       std::vector<int32_t>& b) {
   std::string parquet_name = get_pq_name(encoding);
 
   auto schema = arrow::schema(
-      {arrow::field("a", arrow::int64()), arrow::field("b", arrow::int64())});
+      {arrow::field("a", arrow::int32()), arrow::field("b", arrow::int32())});
 
-  arrow::Int64Builder aBuilder;
+  arrow::Int32Builder aBuilder;
   PARQUET_THROW_NOT_OK(aBuilder.AppendValues(a));
 
-  arrow::Int64Builder bBuilder;
+  arrow::Int32Builder bBuilder;
   PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
 
   std::shared_ptr<arrow::Array> array_a, array_b;
@@ -156,24 +157,30 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int64_t>& a
   uint32_t row_group_size = ROW_GROUP_SIZE;          // 64M / 10
   uint32_t dictionary_pages_size = 1 * 1024 * 1024;  // 64M * 0.03
   arrow::Compression::type codec = arrow::Compression::UNCOMPRESSED;
-  std::shared_ptr<parquet::WriterProperties> properties =
-      parquet::WriterProperties::Builder()
-          .dictionary_pagesize_limit(dictionary_pages_size)
-          ->compression(codec)
-          ->disable_dictionary()
-          ->encoding(encoding)
-          ->version(parquet::ParquetVersion::PARQUET_2_LATEST)
-          ->data_page_version(parquet::ParquetDataPageVersion::V2)
-          ->build();
+  std::shared_ptr<parquet::WriterProperties> properties;
+  auto builder = parquet::WriterProperties::Builder()
+                     .dictionary_pagesize_limit(dictionary_pages_size)
+                     ->compression(codec)
+                     ->version(parquet::ParquetVersion::PARQUET_2_LATEST)
+                     ->data_page_version(parquet::ParquetDataPageVersion::V2);
+  if (encoding == parquet::Encoding::RLE_DICTIONARY) {
+    properties = builder->enable_dictionary()
+                     ->encoding(parquet::Encoding::PLAIN)
+                     ->dictionary_pagesize_limit(512 * 1024 * 1024)
+                     ->build();
+  } else {
+    properties = builder->disable_dictionary()->encoding(encoding)->build();
+  }
   PARQUET_THROW_NOT_OK(parquet::arrow::WriteTable(*table, arrow::default_memory_pool(),
                                                   outfile, row_group_size, properties));
   PARQUET_THROW_NOT_OK(outfile->Close());
   return arrow::Status::OK();
 }
 
-arrow::Status pure_scan(parquet::Encoding::type encoding) {
-  auto begin = stats::Time::now();
+arrow::Status pure_scan(parquet::Encoding::type encoding,
+                        std::vector<uint32_t>* bitpos = nullptr) {
   std::string parquet_name = get_pq_name(encoding);
+  auto begin = stats::Time::now();
   ARROW_ASSIGN_OR_RAISE(auto input, arrow::io::ReadableFile::Open(
                                         parquet_name, arrow::default_memory_pool()));
 
@@ -186,25 +193,104 @@ arrow::Status pure_scan(parquet::Encoding::type encoding) {
                         reader_fut.MoveResult());
 
   std::vector<int> columns;
-  parquet::ScanFileContents(columns, BATCH_SIZE, pq_file_reader.get());
+  if (bitpos == nullptr) {
+    parquet::ScanFileContents(columns, BATCH_SIZE, pq_file_reader.get());
+  } else {
+    if (encoding == parquet::Encoding::RLE_DICTIONARY
+        // ||encoding == parquet::Encoding::PLAIN
+    ) {
+      parquet::ScanFileContentsBitposDict(columns, BATCH_SIZE, pq_file_reader.get(),
+                                          *bitpos);
+    } else {
+      parquet::ScanFileContentsBitpos(columns, BATCH_SIZE, pq_file_reader.get(), *bitpos);
+    }
+  }
   stats::cout_sec(begin, "pure scan " + std::to_string(encoding));
   return arrow::Status::OK();
 }
 
+arrow::Status get_src_file(std::vector<int32_t>& data, std::string& src_file) {
+  std::ifstream srcFile("/root/arrow-private/cpp/Learn-to-Compress/data/" + src_file,
+                        std::ios::in);
+  if (!srcFile) {
+    return arrow::Status::UnknownError("error opening source file.");
+  }
+  while (1) {
+    uint32_t next;
+    srcFile >> next;
+    if (srcFile.eof()) {
+      break;
+    }
+    data.push_back(next);
+  }
+  srcFile.close();
+  return arrow::Status::OK();
+}
+
+// Example Usage: /root/arrow-private/cpp/out/build/leco-release/release/for FOR 1
+// normal_200M_uint32.txt bitmap_random_0.01_200000000.txt 0
 arrow::Status RunMain(int argc, char** argv) {
   std::string encoding = argv[1];
+  bool do_bitpos_flag = std::stoi(argv[2]);
+  source_file = std::string(argv[3]);
+  std::string bitmap_name = std::string(argv[4]);
+  bool gen_data_flag = std::stoi(argv[5]);
+  std::vector<uint32_t> bit_pos;
+  // std::vector<uint32_t> bitpos_vec;
+  std::vector<uint32_t>* vec_ptr;
+  if (do_bitpos_flag) {
+    vec_ptr = &bit_pos;
+  } else {
+    vec_ptr = nullptr;
+  }
+  // begin bitmap file in
+  std::ifstream bitFile(
+      "/root/arrow-private/cpp/Learn-to-Compress/data/bitmap_random/" + bitmap_name,
+      std::ios::in);
+  std::cout << "../data/bitmap_random/" + bitmap_name << std::endl;
+  for (int i = 0;; i++) {
+    uint32_t next;
+    bitFile >> next;
+    if (bitFile.eof()) {
+      break;
+    }
+    if (next) {
+      bit_pos.emplace_back(i);
+    }
+  }
+  bitFile.close();
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::PLAIN));
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::FOR));
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::LECO));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::PLAIN));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::FOR));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::LECO));
+
+  if (gen_data_flag) {
+    // begin src file in
+    std::vector<int32_t> data;
+    PARQUET_THROW_NOT_OK(get_src_file(data, source_file));
+
+    if (encoding == "PLAIN") {
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::PLAIN, data, data));
+    } else if (encoding == "FOR") {
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::FOR, data, data));
+    } else if (encoding == "LECO") {
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::LECO, data, data));
+    } else if (encoding == "DICT") {
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::RLE_DICTIONARY, data, data));
+    } else {
+      std::cout << "wrong encoding" << std::endl;
+    }
+  }
   if (encoding == "PLAIN") {
-    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::PLAIN));
+    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::PLAIN, vec_ptr));
   } else if (encoding == "FOR") {
-    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::FOR));
+    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::FOR, vec_ptr));
   } else if (encoding == "LECO") {
-    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::LECO));
+    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::LECO, vec_ptr));
+  } else if (encoding == "DICT") {
+    ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::RLE_DICTIONARY, vec_ptr));
   } else {
     std::cout << "wrong encoding" << std::endl;
   }

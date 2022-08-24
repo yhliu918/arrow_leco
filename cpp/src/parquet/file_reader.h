@@ -188,5 +188,13 @@ PARQUET_EXPORT
 int64_t ScanFileContentsCheck(std::vector<int> columns, const int32_t column_batch_size,
                               ParquetFileReader* reader, std::vector<int32_t>& a,
                               std::vector<int32_t>& b);
+PARQUET_EXPORT
+int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_batch_size,
+                               ParquetFileReader* reader, std::vector<uint32_t>& bitpos);
 
+PARQUET_EXPORT
+int64_t ScanFileContentsBitposDict(std::vector<int> columns,
+                                   const int32_t column_batch_size,
+                                   ParquetFileReader* reader,
+                                   std::vector<uint32_t>& bitpos);
 }  // namespace parquet
