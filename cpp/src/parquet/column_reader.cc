@@ -575,9 +575,9 @@ class ColumnReaderImplBase {
   }
 
   int64_t ReadValuesBitPos(int64_t batch_size, T* out, int64_t* values_true_read,
-                           std::vector<uint32_t>& bitpos) {
+                           std::vector<uint32_t>& bitpos, int64_t row_index, int64_t bitpos_index) {
     int64_t num_decoded = current_decoder_->DecodeBitpos(
-        out, static_cast<int>(batch_size), values_true_read, bitpos);
+        out, static_cast<int>(batch_size), values_true_read, bitpos, row_index, bitpos_index);
     return num_decoded;
   }
 
@@ -917,7 +917,8 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
                     T* values, int64_t* values_read) override;
   int64_t ReadBatchBitpos(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, int64_t* values_read, int64_t* values_true_read,
-                          std::vector<uint32_t>& bitpos) override;
+                          std::vector<uint32_t>& bitpos, int64_t row_index,
+                          int64_t bitpos_index) override;
 
   int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, uint8_t* valid_bits, int64_t valid_bits_offset,
@@ -1072,7 +1073,8 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, int16_t* def
 template <typename DType>
 int64_t TypedColumnReaderImpl<DType>::ReadBatchBitpos(
     int64_t batch_size, int16_t* def_levels, int16_t* rep_levels, T* values,
-    int64_t* values_read, int64_t* values_true_read, std::vector<uint32_t>& bitpos) {
+    int64_t* values_read, int64_t* values_true_read, std::vector<uint32_t>& bitpos,
+    int64_t row_index, int64_t bitpos_index) {
   // HasNext invokes ReadNewPage
   if (!HasNext()) {
     *values_read = 0;
@@ -1085,7 +1087,7 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatchBitpos(
   int64_t values_to_read = 0;
   ReadLevels(batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
 
-  *values_read = this->ReadValuesBitPos(values_to_read, values, values_true_read, bitpos);
+  *values_read = this->ReadValuesBitPos(values_to_read, values, values_true_read, bitpos, row_index, bitpos_index);
   int64_t total_values = std::max(num_def_levels, *values_read);
   int64_t expected_values =
       std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);

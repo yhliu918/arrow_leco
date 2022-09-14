@@ -49,6 +49,7 @@ class Dictionary32Builder;
 }  // namespace arrow
 
 namespace parquet {
+extern size_t kForBlockSize;
 
 template <typename DType>
 class TypedEncoder;
@@ -280,7 +281,8 @@ class TypedDecoder : virtual public Decoder {
   virtual int Decode(T* buffer, int max_values) = 0;
 
   virtual int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                           std::vector<uint32_t>& bitpos) {
+                           std::vector<uint32_t>& bitpos, int64_t row_index,
+                           int64_t bitpos_index) {
     ParquetException::NYI("DecodeBitpos not supported for TypedDecoder base class");
   }
 

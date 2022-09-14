@@ -964,10 +964,13 @@ int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_ba
   }
 
   std::vector<int64_t> total_rows(num_columns, 0);
-  // int64_t total_true_read = 0;
+  int64_t total_true_read = 0;
+  int64_t row_index = 0;
   for (int r = 0; r < reader->metadata()->num_row_groups(); ++r) {
     auto group_reader = reader->RowGroup(r);
     int col = 0;
+    int64_t levels_read_this_round;
+    int64_t total_true_read_this_round;
     for (auto i : columns) {
       std::shared_ptr<ColumnReader> col_reader = group_reader->Column(i);
       size_t value_byte_size = GetTypeByteSize(col_reader->descr()->physical_type());
@@ -975,16 +978,24 @@ int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_ba
       std::vector<uint8_t> values(bitpos.size() * value_byte_size);
 
       int64_t values_read = 0, values_true_read = 0;
+      levels_read_this_round = 0;
+      total_true_read_this_round = 0;
       while (col_reader->HasNext()) {
         int64_t levels_read = ScanAllValuesBitpos(
             column_batch_size, def_levels.data(), rep_levels.data(), values.data(),
-            &values_read, col_reader.get(), &values_true_read, bitpos);
-        // total_true_read += values_true_read;
+            &values_read, col_reader.get(), &values_true_read, bitpos,
+            row_index + levels_read_this_round,
+            total_true_read + total_true_read_this_round);
+        total_true_read_this_round += values_true_read;
+        levels_read_this_round += levels_read;
       }
       col++;
     }
+    row_index += levels_read_this_round;
+    total_true_read += total_true_read_this_round;
   }
-  // printf("%ld\n", total_true_read);
+  printf("%ld\n", total_true_read);
+  printf("%ld\n", row_index);
   for (int i = 1; i < num_columns; ++i) {
     if (total_rows[0] != total_rows[i]) {
       throw ParquetException("Parquet error: Total rows among columns do not match");

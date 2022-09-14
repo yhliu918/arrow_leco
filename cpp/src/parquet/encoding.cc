@@ -67,14 +67,13 @@ template <typename T>
 using ArrowPoolVector = std::vector<T, ::arrow::stl::allocator<T>>;
 
 namespace parquet {
+size_t kForBlockSize = 2000;
 namespace {
 
 constexpr int64_t kInMemoryDefaultCapacity = 1024;
 // The Parquet spec isn't very clear whether ByteArray lengths are signed or
 // unsigned, but the Java implementation uses signed ints.
 constexpr size_t kMaxByteArraySize = std::numeric_limits<int32_t>::max();
-
-constexpr size_t kForBlockSize = 2000;
 
 class EncoderImpl : virtual public Encoder {
  public:
@@ -1112,8 +1111,8 @@ LecoEncoder<DType>::LecoEncoder(const ColumnDescriptor* descr, ::arrow::MemoryPo
       num_values_in_buffer_{0},
       block_size_(kForBlockSize),
       buffer_values_(::arrow::stl::allocator<T>(pool)),
-      // FIXME(xinyu): hardcode 2MB buffer for now.
-      output_buffer_(AllocateBuffer(pool, 2 * 1024 * 1024)),
+      // FIXME(xinyu): hardcode 200MB buffer for now.
+      output_buffer_(AllocateBuffer(pool, 200 * 1024 * 1024)),
       segment_sizes_(::arrow::stl::allocator<T>(pool)),
       output_buffer_size_(0) {
   segment_sizes_.push_back(0);
@@ -1144,6 +1143,9 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
   ARROW_CHECK_OK(output_buffer_->Resize(output_buffer_size_));
   buffer_values_.clear();
   // build segment sizes buffer and concat and return
+  if (block_length == 0) {
+    segment_sizes_.pop_back();
+  }
   std::shared_ptr<ResizableBuffer> segment_sizes_buffer =
       AllocateBuffer(pool_, segment_sizes_.size() * sizeof(uint32_t));
   memcpy(segment_sizes_buffer->mutable_data(), &segment_sizes_[0],
@@ -1165,7 +1167,7 @@ void LecoEncoder<DType>::Put(const T* buffer, int num_values) {
     // PARQUET_THROW_NOT_OK(sink_.Append(buffer, num_values * sizeof(T)));
     buffer_values_.insert(buffer_values_.end(), buffer, buffer + num_values);
     num_values_in_buffer_ += num_values;
-    if (buffer_values_.size() >= block_size_) {
+    while (buffer_values_.size() >= block_size_) {
       uint8_t* output_buffer_raw = output_buffer_->mutable_data() + output_buffer_size_;
       const uint8_t* raw_values = (const uint8_t*)&buffer_values_[0];
 
@@ -1176,6 +1178,7 @@ void LecoEncoder<DType>::Put(const T* buffer, int num_values) {
       uint32_t segment_size = res - output_buffer_raw;
       segment_sizes_.push_back(segment_size);
       output_buffer_size_ += segment_size;
+      // eliminate the first [block_size_] elements in buffer_values_
       ArrowPoolVector<T>(buffer_values_.begin() + block_size_, buffer_values_.end())
           .swap(buffer_values_);
     }
@@ -1231,7 +1234,8 @@ class PlainDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
 
   int Decode(T* buffer, int max_values) override;
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                   std::vector<uint32_t>& bitpos) override;
+                   std::vector<uint32_t>& bitpos, int64_t row_index,
+                   int64_t bitpos_index) override;
 
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
@@ -1413,7 +1417,10 @@ int PlainDecoder<DType>::Decode(T* buffer, int max_values) {
 
 template <typename DType>
 int PlainDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                                      std::vector<uint32_t>& bitpos) {
+                                      std::vector<uint32_t>& bitpos, int64_t row_index,
+                                      int64_t bitpos_index) {
+  row_index_base_ = row_index;
+  bitpos_index_ = bitpos_index;
   max_values = std::min(max_values, num_values_);
   // int bytes_consumed = DecodePlain<T>(data_, len_, max_values, type_length_, buffer);
   int bytes_consumed = max_values * sizeof(T);
@@ -2957,7 +2964,8 @@ class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
 
   int Decode(T* buffer, int max_values) override;
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                   std::vector<uint32_t>& bitpos) override;
+                   std::vector<uint32_t>& bitpos, int64_t row_index,
+                   int64_t bitpos_index) override;
 
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
@@ -3063,7 +3071,10 @@ int FORDecoder<DType>::Decode(T* buffer, int max_values) {
 
 template <typename DType>
 int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                                    std::vector<uint32_t>& bitpos) {
+                                    std::vector<uint32_t>& bitpos, int64_t row_index,
+                                    int64_t bitpos_index) {
+  row_index_base_ = row_index;
+  bitpos_index_ = bitpos_index;
   if (max_values < num_values_) {
     ParquetException::EofException(
         "The current implementation expect decode all at once");
@@ -3125,7 +3136,8 @@ class LecoDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   int Decode(T* buffer, int max_values) override;
 
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                   std::vector<uint32_t>& bitpos) override;
+                   std::vector<uint32_t>& bitpos, int64_t row_index,
+                   int64_t bitpos_index) override;
 
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
@@ -3231,7 +3243,10 @@ int LecoDecoder<DType>::Decode(T* buffer, int max_values) {
 
 template <typename DType>
 int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
-                                     std::vector<uint32_t>& bitpos) {
+                                     std::vector<uint32_t>& bitpos, int64_t row_index,
+                                     int64_t bitpos_index) {
+  row_index_base_ = row_index;
+  bitpos_index_ = bitpos_index;
   if (max_values < num_values_) {
     ParquetException::EofException(
         "The current implementation expect decode all at once");
