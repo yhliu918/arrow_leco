@@ -23,8 +23,11 @@ for size in sizes:
                      f"bitmap_random_0.001_{size}.txt", f"bitmap_random_0.01_{size}.txt", f"bitmap_random_0.1_{size}.txt"]
 selectivities = [0.001, 0.01, 0.05, 0.1, 1, 10]
 # encodings = ['LECO']
-encodings = ['PLAIN', 'DICT','FOR', 'LECO']
+# encodings = ['PLAIN', 'DICT','FOR', 'LECO']
+encodings = ['LECO', 'PLAIN', 'FOR']
 block_size_list = [2000, 200, 289, 2076, 233]
+row_group_size = 10 # unit: M
+iterations = 5
 
 def parse_output(filename, output_stats):
     # os.makedirs(os.path.dirname("outputs/stats.json"), exist_ok=True)
@@ -65,16 +68,16 @@ def compile_binary(block_size):
 def gen_data():
     for encoding in encodings:
         for src in src_files:
-            os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_2000 \
-                {encoding} 1 {src} {bitmap_names_dict[200000000][0]} 1''')
-        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_200 \
-                {encoding} 1 {books} {bitmap_names_dict[200000000][0]} 1''')
-        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_289 \
-                {encoding} 1 {fb} {bitmap_names_dict[200000000][0]} 1''')
-        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_2076 \
-                {encoding} 1 {wiki} {bitmap_names_dict[200000000][0]} 1''')
-        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_233 \
-                {encoding} 1 {newman} {bitmap_names_dict[200000000][0]} 1''')
+            os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
+                {encoding} 1 {src} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 2000''')
+        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
+                {encoding} 1 {books} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 200''')
+        # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_289 \
+        #         {encoding} 1 {fb} {bitmap_names_dict[200000000][0]} 1''')
+        # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_2076 \
+        #         {encoding} 1 {wiki} {bitmap_names_dict[200000000][0]} 1''')
+        # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_233 \
+        #         {encoding} 1 {newman} {bitmap_names_dict[200000000][0]} 1''')
 
 
 def exp_file_unit(output_file_name, output_stats, encoding, dataset, size, block_size):
@@ -83,8 +86,8 @@ def exp_file_unit(output_file_name, output_stats, encoding, dataset, size, block
     for i, bitmap in enumerate(bitmap_names_dict[size]):
         output_stats['selectivity'] = selectivities[i]
         os.system('sync; echo 3 > /proc/sys/vm/drop_caches')
-        output = os.popen(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_{block_size} \
-        {encoding} 1 {dataset} {bitmap} 0''').read()
+        output = os.popen(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
+        {encoding} 1 {dataset} {bitmap} 0 {row_group_size} {block_size}''').read()
         for line in output.splitlines():
             if line.startswith("pure scan"):
                 # output_file.write(line.split(':')[-1].strip()+"\n")
@@ -96,10 +99,10 @@ def exp_file_unit(output_file_name, output_stats, encoding, dataset, size, block
 def run_exp():
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     # output_file = open(timestamp+".json", "a+")
-    out_file_name = timestamp+".json"
+    out_file_name = f'{PROJ_SRC_DIR}/output/{timestamp}.json'
     output_stats = {}
 
-    for i in range(5):
+    for i in range(iterations):
         output_stats['i'] = i
         for encoding in encodings:
             print(f'running exp for {encoding}')
@@ -109,11 +112,11 @@ def run_exp():
             for src in src_files:
                 # output_file.write(f"{src}\n")
                 output_stats['dataset'] = src
-                for i, bitmap in enumerate(bitmap_names_dict[200000000]):
-                    output_stats['selectivity'] = selectivities[i]
+                for j, bitmap in enumerate(bitmap_names_dict[200000000]):
+                    output_stats['selectivity'] = selectivities[j]
                     os.system('sync; echo 3 > /proc/sys/vm/drop_caches')
-                    output = os.popen(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_2000 \
-                    {encoding} 1 {src} {bitmap} 0''').read()
+                    output = os.popen(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
+                    {encoding} 1 {src} {bitmap} 0 {row_group_size} 2000''').read()
                     for line in output.splitlines():
                         if line.startswith("pure scan"):
                             # output_file.write(line.split(':')[-1].strip()+"\n")
@@ -124,11 +127,11 @@ def run_exp():
             # books, 199999994 bitmap, 200 block size
             exp_file_unit(out_file_name, output_stats, encoding, books, 199999994, 200)
             # fb, 289K bitmap, 289 block size
-            exp_file_unit(out_file_name, output_stats, encoding, fb, 289000, 289)
+            # exp_file_unit(out_file_name, output_stats, encoding, fb, 289000, 289)
             # wiki, 2076K bitmap, 2076 block size
-            exp_file_unit(out_file_name, output_stats, encoding, wiki, 2076000, 2076)
+            # exp_file_unit(out_file_name, output_stats, encoding, wiki, 2076000, 2076)
             # newman, 233K bitmap, 233 block size
-            exp_file_unit(out_file_name, output_stats, encoding, newman, 233000, 233)
+            # exp_file_unit(out_file_name, output_stats, encoding, newman, 233000, 233)
     # print(f'output saved to: {timestamp}.txt')
     # output_file.close()
     collect_results(out_file_name)

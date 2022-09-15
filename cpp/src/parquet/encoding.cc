@@ -1453,7 +1453,7 @@ int PlainDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_
   int bytes_consumed = max_values * sizeof(T);
   int count = 0;
   for (; bitpos_index_ < bitpos.size() &&
-         bitpos[bitpos_index_] <= (row_index_base_ + num_values_);
+         bitpos[bitpos_index_] < (row_index_base_ + num_values_);
        ++bitpos_index_) {
     auto true_pos = bitpos[bitpos_index_] - row_index_base_;
     *(buffer++) = *reinterpret_cast<const T*>(data_ + true_pos * sizeof(T));
@@ -3118,7 +3118,7 @@ int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_tr
   }
   int count = 0;
   for (; bitpos_index_ < bitpos.size() &&
-         bitpos[bitpos_index_] <= (row_index_base_ + num_values_);
+         bitpos[bitpos_index_] < (row_index_base_ + num_values_);
        ++bitpos_index_) {
     auto true_pos = bitpos[bitpos_index_] - row_index_base_;
     T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
@@ -3290,7 +3290,7 @@ int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_t
   }
   int count = 0;
   for (; bitpos_index_ < bitpos.size() &&
-         bitpos[bitpos_index_] <= (row_index_base_ + num_values_);
+         bitpos[bitpos_index_] < (row_index_base_ + num_values_);
        ++bitpos_index_) {
     auto true_pos = bitpos[bitpos_index_] - row_index_base_;
     T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
