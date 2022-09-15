@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -966,8 +967,16 @@ int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_ba
   std::vector<int64_t> total_rows(num_columns, 0);
   int64_t total_true_read = 0;
   int64_t row_index = 0;
+  // std::cout << "num_row_groups: " << reader->metadata()->num_row_groups() << std::endl;
   for (int r = 0; r < reader->metadata()->num_row_groups(); ++r) {
     auto group_reader = reader->RowGroup(r);
+    auto num_rows = group_reader->metadata()->num_rows();
+    if (total_true_read < bitpos.size() &&
+        bitpos[total_true_read] > row_index + num_rows) {
+      row_index += num_rows;
+      // std::cout << "skip row group: " << r << std::endl;
+      continue;
+    }
     int col = 0;
     int64_t levels_read_this_round;
     int64_t total_true_read_this_round;

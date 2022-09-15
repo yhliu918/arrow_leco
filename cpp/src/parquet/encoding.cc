@@ -981,6 +981,11 @@ class FOREncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
   int64_t num_values_in_buffer_;
   Codecset::FOR_int<T> codec_;
   size_t block_size_;
+  ArrowPoolVector<T> buffer_values_;                // values not yet encoded
+  std::shared_ptr<ResizableBuffer> output_buffer_;  // encoded buffer
+  // std::shared_ptr<ResizableBuffer> segment_size_buffer_; // segment size buffer
+  ArrowPoolVector<uint32_t> segment_sizes_;  // segment sizes
+  uint64_t output_buffer_size_;              // size of output_buffer_ in bytes
 };
 
 template <typename DType>
@@ -988,63 +993,83 @@ FOREncoder<DType>::FOREncoder(const ColumnDescriptor* descr, ::arrow::MemoryPool
     : EncoderImpl(descr, Encoding::FOR, pool),
       sink_{pool},
       num_values_in_buffer_{0},
-      block_size_(kForBlockSize) {}
+      block_size_(kForBlockSize),
+      buffer_values_(::arrow::stl::allocator<T>(pool)),
+      // FIXME(xinyu): hardcode 400MB buffer for now.
+      output_buffer_(AllocateBuffer(pool, 400 * 1024 * 1024)),
+      segment_sizes_(::arrow::stl::allocator<T>(pool)),
+      output_buffer_size_(0) {
+  segment_sizes_.push_back(0);
+}
 
 template <typename DType>
 int64_t FOREncoder<DType>::EstimatedDataEncodedSize() {
-  return sink_.length();
+  return output_buffer_size_ +                             // encoded size
+         sizeof(uint32_t) * (segment_sizes_.size() + 1) +  // block_start size
+         sizeof(T) * buffer_values_.size();                // unencoded size
 }
 
 template <typename DType>
 std::shared_ptr<Buffer> FOREncoder<DType>::FlushValues() {
-  int blocks = num_values_in_buffer_ / block_size_;
-  if (blocks * block_size_ < num_values_in_buffer_) {
-    blocks++;
-  }
-  std::shared_ptr<ResizableBuffer> output_buffer = AllocateBuffer(
-      this->memory_pool(), 2 * EstimatedDataEncodedSize() + sizeof(uint32_t) * blocks);
-  uint8_t* output_buffer_raw = output_buffer->mutable_data();
-  const uint8_t* raw_values = sink_.data();
-  uint8_t* output_buffer_without_header = output_buffer_raw + sizeof(uint32_t) * blocks;
-  uint64_t totalsize = sizeof(uint32_t) * blocks;
-  *(uint32_t*)output_buffer_raw = 0;
-  output_buffer_raw += sizeof(uint32_t);
-  for (int i = 0; i < blocks; i++) {
-    // std::cout<<"block "<<i<<std::endl;
-    int block_length = block_size_;
-    if (i == blocks - 1) {
-      block_length = num_values_in_buffer_ - (blocks - 1) * block_size_;
-    }
+  uint8_t* output_buffer_raw = output_buffer_->mutable_data() + output_buffer_size_;
+  const uint8_t* raw_values = (const uint8_t*)&buffer_values_[0];
+
+  int block_length = buffer_values_.size();
+  if (block_length > 0) {
     // if fixed length segment
-    uint8_t* res =
-        codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values) + i * block_size_,
-                                block_length, output_buffer_without_header, i);
-    uint32_t segment_size = res - output_buffer_without_header;
-    if (i != blocks - 1) {
-      memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
-      output_buffer_raw += sizeof(uint32_t);
-    }
-    output_buffer_without_header = res;
-    totalsize += segment_size;
+    uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
+                                           block_length, output_buffer_raw, 0);
+    uint32_t segment_size = res - output_buffer_raw;
+    // if (i != blocks - 1) {
+    //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
+    //   output_buffer_raw += sizeof(uint32_t);
+    // }
+    output_buffer_size_ += segment_size;
+    buffer_values_.clear();
   }
-  ARROW_CHECK_OK(output_buffer->Resize(totalsize));
-  // ::arrow::util::internal::ByteStreamSplitEncode<T>(raw_values, num_values_in_buffer_,
-  // output_buffer_raw);
-  sink_.Reset();
-  num_values_in_buffer_ = 0;
-  // std::shared_ptr<Buffer> buffer;
-  // PARQUET_THROW_NOT_OK(sink_.Finish(&buffer));
-  return std::move(output_buffer);
+  ARROW_CHECK_OK(output_buffer_->Resize(output_buffer_size_));
+  // build segment sizes buffer and concat and return
+  if (block_length == 0) {
+    segment_sizes_.pop_back();
+  }
+  std::shared_ptr<ResizableBuffer> segment_sizes_buffer =
+      AllocateBuffer(pool_, segment_sizes_.size() * sizeof(uint32_t));
+  memcpy(segment_sizes_buffer->mutable_data(), &segment_sizes_[0],
+         segment_sizes_.size() * sizeof(uint32_t));
+  ::arrow::BufferVector buff_vec;
+  buff_vec.push_back(segment_sizes_buffer);
+  buff_vec.push_back(output_buffer_);
+  auto result_buff = ConcatenateBuffers(buff_vec, pool_).ValueOrDie();
+  segment_sizes_.clear();
+  segment_sizes_.push_back(0);
+  ARROW_CHECK_OK(output_buffer_->Resize(200 * 1024 * 1024));
+  output_buffer_size_ = 0;
+  return std::move(result_buff);
 }
 
 template <typename DType>
 void FOREncoder<DType>::Put(const T* buffer, int num_values) {
   if (num_values > 0) {
-    PARQUET_THROW_NOT_OK(sink_.Append(buffer, num_values * sizeof(T)));
+    // PARQUET_THROW_NOT_OK(sink_.Append(buffer, num_values * sizeof(T)));
+    buffer_values_.insert(buffer_values_.end(), buffer, buffer + num_values);
     num_values_in_buffer_ += num_values;
+    while (buffer_values_.size() >= block_size_) {
+      uint8_t* output_buffer_raw = output_buffer_->mutable_data() + output_buffer_size_;
+      const uint8_t* raw_values = (const uint8_t*)&buffer_values_[0];
+
+      int block_length = block_size_;
+      // if fixed length segment
+      uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
+                                             block_length, output_buffer_raw, 0);
+      uint32_t segment_size = res - output_buffer_raw;
+      segment_sizes_.push_back(segment_size);
+      output_buffer_size_ += segment_size;
+      // eliminate the first [block_size_] elements in buffer_values_
+      ArrowPoolVector<T>(buffer_values_.begin() + block_size_, buffer_values_.end())
+          .swap(buffer_values_);
+    }
   }
 }
-
 template <>
 void FOREncoder<Int32Type>::Put(const ::arrow::Array& values) {
   throw ParquetException("Put from array not implemented");
@@ -1131,17 +1156,19 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
   const uint8_t* raw_values = (const uint8_t*)&buffer_values_[0];
 
   int block_length = buffer_values_.size();
-  // if fixed length segment
-  uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
-                                         block_length, output_buffer_raw, 0);
-  uint32_t segment_size = res - output_buffer_raw;
-  // if (i != blocks - 1) {
-  //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
-  //   output_buffer_raw += sizeof(uint32_t);
-  // }
-  output_buffer_size_ += segment_size;
+  if (block_length > 0) {
+    // if fixed length segment
+    uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
+                                           block_length, output_buffer_raw, 0);
+    uint32_t segment_size = res - output_buffer_raw;
+    // if (i != blocks - 1) {
+    //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
+    //   output_buffer_raw += sizeof(uint32_t);
+    // }
+    output_buffer_size_ += segment_size;
+    buffer_values_.clear();
+  }
   ARROW_CHECK_OK(output_buffer_->Resize(output_buffer_size_));
-  buffer_values_.clear();
   // build segment sizes buffer and concat and return
   if (block_length == 0) {
     segment_sizes_.pop_back();
@@ -1156,7 +1183,7 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
   auto result_buff = ConcatenateBuffers(buff_vec, pool_).ValueOrDie();
   segment_sizes_.clear();
   segment_sizes_.push_back(0);
-  ARROW_CHECK_OK(output_buffer_->Resize(2 * 1024 * 1024));
+  ARROW_CHECK_OK(output_buffer_->Resize(200 * 1024 * 1024));
   output_buffer_size_ = 0;
   return std::move(result_buff);
 }
