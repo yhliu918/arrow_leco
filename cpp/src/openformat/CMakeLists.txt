@@ -24,6 +24,7 @@ add_executable(raw_reader raw_reader.cc)
 add_executable(raw_reader_v2 raw_reader_v2.cc)
 add_executable(rle_test rle_test.cc)
 add_executable(for for.cc)
+add_executable(test_binary test_binary.cc)
 # target_include_directories(parquet-low-level-example PRIVATE low_level_api/)
 # target_include_directories(parquet-low-level-example2 PRIVATE low_level_api/)
 

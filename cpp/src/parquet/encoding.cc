@@ -1828,6 +1828,30 @@ class DictDecoderImpl : public DecoderImpl, virtual public DictDecoder<Type> {
     return num_values;
   }
 
+  int DecodeBitpos(T* buffer, int num_values, int64_t* value_true_read,
+                   std::vector<uint32_t>& bitpos, int64_t row_index,
+                   int64_t bitpos_index) override {
+    num_values = std::min(num_values, num_values_);
+
+    std::vector<T> values(num_values);
+    int decoded_values =
+        idx_decoder_.GetBatchWithDict(reinterpret_cast<const T*>(dictionary_->data()),
+                                      dictionary_length_, &values[0], num_values);
+    if (decoded_values != num_values) {
+      ParquetException::EofException();
+    }
+    int count = 0;
+    for (;
+         bitpos_index < bitpos.size() && bitpos[bitpos_index] < (row_index + num_values_);
+         ++bitpos_index) {
+      auto true_pos = bitpos[bitpos_index] - row_index;
+      buffer[*value_true_read + count++] = values[true_pos];
+    }
+    *value_true_read = count;
+    num_values_ -= num_values;
+    return num_values;
+  }
+
   int DecodeSpaced(T* buffer, int num_values, int null_count, const uint8_t* valid_bits,
                    int64_t valid_bits_offset) override {
     num_values = std::min(num_values, num_values_);

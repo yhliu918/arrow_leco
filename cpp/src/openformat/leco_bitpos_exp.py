@@ -12,6 +12,7 @@ src_files = ["normal_200M_uint32.txt", "linear_200M_uint32.txt"]
 books = "books_200M_uint32.txt"
 fb = "fb-289000.txt"
 wiki = "wiki.txt"
+wiki_200M = "wiki_200M_uint64"
 newman = "newman.txt"
 
 bitmap_names_dict = {}
@@ -23,11 +24,11 @@ for size in sizes:
                      f"bitmap_random_0.001_{size}.txt", f"bitmap_random_0.01_{size}.txt", f"bitmap_random_0.1_{size}.txt"]
 selectivities = [0.001, 0.01, 0.05, 0.1, 1, 10]
 # encodings = ['LECO']
-# encodings = ['PLAIN', 'DICT','FOR', 'LECO']
-encodings = ['LECO', 'PLAIN', 'FOR']
+encodings = ['PLAIN', 'DICT','FOR', 'LECO']
+# encodings = ['DICT']
 block_size_list = [2000, 200, 289, 2076, 233]
 row_group_size = 10 # unit: M
-iterations = 5
+iterations = 3
 
 def parse_output(filename, output_stats):
     # os.makedirs(os.path.dirname("outputs/stats.json"), exist_ok=True)
@@ -72,6 +73,8 @@ def gen_data():
                 {encoding} 1 {src} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 2000''')
         os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
                 {encoding} 1 {books} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 200''')
+        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
+                {encoding} 1 {wiki_200M} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 200''')
         # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_289 \
         #         {encoding} 1 {fb} {bitmap_names_dict[200000000][0]} 1''')
         # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_2076 \
@@ -126,6 +129,8 @@ def run_exp():
                     sleep(1)
             # books, 199999994 bitmap, 200 block size
             exp_file_unit(out_file_name, output_stats, encoding, books, 199999994, 200)
+            # wiki large
+            exp_file_unit(out_file_name, output_stats, encoding, wiki_200M, 200000000, 200)
             # fb, 289K bitmap, 289 block size
             # exp_file_unit(out_file_name, output_stats, encoding, fb, 289000, 289)
             # wiki, 2076K bitmap, 2076 block size
@@ -143,6 +148,6 @@ if __name__ == "__main__":
     # for block_size in block_size_list:
     #     compile_binary(block_size)
 
-    # gen_data()
+    gen_data()
     print('finished gen data')
     run_exp()
