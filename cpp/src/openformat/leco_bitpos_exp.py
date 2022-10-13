@@ -14,11 +14,14 @@ fb = "fb-289000.txt"
 wiki = "wiki.txt"
 wiki_200M = "wiki_200M_uint64"
 newman = "newman.txt"
+ml = "ml_timestamp_200M.csv"
+# ml = "ml_timestamp_200M_int32.csv"
+possion = "poisson_timestamps_EVENT_50000_SENSOR_2000_randomdie_OUTER_1000s_INNER_2ms_200M.csv"
 
 bitmap_names_dict = {}
 # bitmap_names_200M = ["bitmap_random_1e-05_200000000.txt", "bitmap_random_0.0001_200000000.txt", "bitmap_random_0.0005_200000000.txt",
 #                      "bitmap_random_0.001_200000000.txt", "bitmap_random_0.01_200000000.txt", "bitmap_random_0.1_200000000.txt"]
-sizes = [200000000, 199999994, 289000, 2076000, 233000]
+sizes = [200000000, 199999994, 289000, 2076000, 233000, 14057565, 200015910]
 for size in sizes:
     bitmap_names_dict[size] = [f"bitmap_random_1e-05_{size}.txt", f"bitmap_random_0.0001_{size}.txt", f"bitmap_random_0.0005_{size}.txt",
                      f"bitmap_random_0.001_{size}.txt", f"bitmap_random_0.01_{size}.txt", f"bitmap_random_0.1_{size}.txt"]
@@ -26,7 +29,7 @@ selectivities = [0.001, 0.01, 0.05, 0.1, 1, 10]
 # encodings = ['LECO']
 encodings = ['PLAIN', 'DICT','FOR', 'LECO']
 # encodings = ['DICT']
-block_size_list = [2000, 200, 289, 2076, 233]
+block_size_list = [2000, 200, 289, 2076, 233] # no longer use
 row_group_size = 10 # unit: M
 iterations = 3
 
@@ -75,6 +78,10 @@ def gen_data():
                 {encoding} 1 {books} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 200''')
         os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
                 {encoding} 1 {wiki_200M} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 200''')
+        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_64 \
+                {encoding} 1 {ml} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 140''')
+        os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_64 \
+                {encoding} 1 {possion} {bitmap_names_dict[200000000][0]} 1 {row_group_size} 88''')
         # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_289 \
         #         {encoding} 1 {fb} {bitmap_names_dict[200000000][0]} 1''')
         # os.system(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for_2076 \
@@ -83,13 +90,14 @@ def gen_data():
         #         {encoding} 1 {newman} {bitmap_names_dict[200000000][0]} 1''')
 
 
-def exp_file_unit(output_file_name, output_stats, encoding, dataset, size, block_size):
+def exp_file_unit(output_file_name, output_stats, encoding, dataset, size, block_size, for_64=False):
     # output_file.write(f"{dataset}\n")
     output_stats['dataset'] = dataset
     for i, bitmap in enumerate(bitmap_names_dict[size]):
         output_stats['selectivity'] = selectivities[i]
         os.system('sync; echo 3 > /proc/sys/vm/drop_caches')
-        output = os.popen(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/for \
+        executable = 'for_64' if for_64 else 'for'
+        output = os.popen(f'''{PROJ_SRC_DIR}/out/build/leco-release/release/{executable} \
         {encoding} 1 {dataset} {bitmap} 0 {row_group_size} {block_size}''').read()
         for line in output.splitlines():
             if line.startswith("pure scan"):
@@ -130,7 +138,10 @@ def run_exp():
             # books, 199999994 bitmap, 200 block size
             exp_file_unit(out_file_name, output_stats, encoding, books, 199999994, 200)
             # wiki large
-            exp_file_unit(out_file_name, output_stats, encoding, wiki_200M, 200000000, 200)
+            # exp_file_unit(out_file_name, output_stats, encoding, wiki_200M, 200000000, 200)
+            # ml
+            exp_file_unit(out_file_name, output_stats, encoding, ml, 200000000, 140, for_64=True)
+            exp_file_unit(out_file_name, output_stats, encoding, possion, 200015910, 88, for_64=True)
             # fb, 289K bitmap, 289 block size
             # exp_file_unit(out_file_name, output_stats, encoding, fb, 289000, 289)
             # wiki, 2076K bitmap, 2076 block size
@@ -148,6 +159,6 @@ if __name__ == "__main__":
     # for block_size in block_size_list:
     #     compile_binary(block_size)
 
-    gen_data()
+    # gen_data()
     print('finished gen data')
     run_exp()

@@ -38,7 +38,7 @@ std::string source_file;
 std::string get_pq_name(parquet::Encoding::type encoding) {
   return "./encoding" + std::to_string(encoding) + "_rowgroup" +
          std::to_string(ROW_GROUP_SIZE) + "_datasize" + std::to_string(DATA_SIZE) +
-         source_file + ".parquet";
+         source_file + ".zstd.parquet";
 }
 
 arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
@@ -174,7 +174,7 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint32_t>& 
 
   uint32_t row_group_size = ROW_GROUP_SIZE;          // 64M / 10
   uint32_t dictionary_pages_size = 1 * 1024 * 1024;  // 64M * 0.03
-  arrow::Compression::type codec = arrow::Compression::UNCOMPRESSED;
+  arrow::Compression::type codec = arrow::Compression::ZSTD;
   std::shared_ptr<parquet::WriterProperties> properties;
   auto builder = parquet::WriterProperties::Builder()
                      .dictionary_pagesize_limit(dictionary_pages_size)

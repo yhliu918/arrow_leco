@@ -137,18 +137,18 @@ arrow::Status full_scan_test(parquet::Encoding::type encoding) {
   return arrow::Status::OK();
 }
 
-arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint32_t>& a,
-                       std::vector<uint32_t>& b) {
+arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<int64_t>& a,
+                       std::vector<int64_t>& b) {
   std::string parquet_name = get_pq_name(encoding);
 
-  auto schema = arrow::schema({arrow::field("a", arrow::uint32())});
-  // {arrow::field("a", arrow::uint32()), arrow::field("b", arrow::uint32())});
+  auto schema = arrow::schema(
+      {arrow::field("a", arrow::int64()), arrow::field("b", arrow::int64())});
 
-  arrow::UInt32Builder aBuilder;
+  arrow::Int64Builder aBuilder;
   PARQUET_THROW_NOT_OK(aBuilder.AppendValues(a));
 
-  // arrow::UInt32Builder bBuilder;
-  // PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
+  arrow::Int64Builder bBuilder;
+  PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
   // arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint32_t>& a,
   //                        std::vector<uint32_t>& b) {
   //   std::string parquet_name = get_pq_name(encoding);
@@ -162,13 +162,11 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint32_t>& 
   //   arrow::UInt32Builder bBuilder;
   //   PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
 
-  std::shared_ptr<arrow::Array> array_a;
-  // std::shared_ptr<arrow::Array> array_a, array_b;
+  std::shared_ptr<arrow::Array> array_a, array_b;
   ARROW_ASSIGN_OR_RAISE(array_a, aBuilder.Finish());
-  // ARROW_ASSIGN_OR_RAISE(array_b, bBuilder.Finish());
+  ARROW_ASSIGN_OR_RAISE(array_b, bBuilder.Finish());
 
-  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {array_a});
-  // std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {array_a, array_b});
+  std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {array_a, array_b});
   std::shared_ptr<arrow::io::FileOutputStream> outfile;
   PARQUET_ASSIGN_OR_THROW(outfile, arrow::io::FileOutputStream::Open(parquet_name));
 
@@ -228,14 +226,14 @@ arrow::Status pure_scan(parquet::Encoding::type encoding,
 }
 
 // arrow::Status get_src_file(std::vector<uint32_t>& data, std::string& src_file) {
-arrow::Status get_src_file(std::vector<uint32_t>& data, std::string& src_file) {
+arrow::Status get_src_file(std::vector<int64_t>& data, std::string& src_file) {
   std::ifstream srcFile("/root/arrow-private/cpp/Learn-to-Compress/data/" + src_file,
                         std::ios::in);
   if (!srcFile) {
     return arrow::Status::UnknownError("error opening source file.");
   }
   while (1) {
-    uint32_t next;
+    int64_t next;
     srcFile >> next;
     if (srcFile.eof()) {
       break;
@@ -315,7 +313,7 @@ arrow::Status RunMain(int argc, char** argv) {
 
   if (gen_data_flag) {
     // begin src file in
-    std::vector<uint32_t> data;
+    std::vector<int64_t> data;
     // std::vector<uint32_t> data;
     if (source_file == "wiki_200M_uint64") {
       auto data_64 = load_data_binary<uint64_t>(

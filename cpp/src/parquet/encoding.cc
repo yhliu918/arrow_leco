@@ -979,7 +979,8 @@ class FOREncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
 
   ::arrow::BufferBuilder sink_;
   int64_t num_values_in_buffer_;
-  Codecset::FOR_int<T> codec_;
+  Codecset::FOR_int<uint32_t> codec_32_;
+  Codecset::FOR_int<uint64_t> codec_64_;
   size_t block_size_;
   ArrowPoolVector<T> buffer_values_;                // values not yet encoded
   std::shared_ptr<ResizableBuffer> output_buffer_;  // encoded buffer
@@ -1017,8 +1018,14 @@ std::shared_ptr<Buffer> FOREncoder<DType>::FlushValues() {
   int block_length = buffer_values_.size();
   if (block_length > 0) {
     // if fixed length segment
-    uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
-                                           block_length, output_buffer_raw, 0);
+    uint8_t* res;
+    if (sizeof(T) == 4) {
+      res = codec_32_.encodeArray8_int(reinterpret_cast<const uint32_t*>(raw_values),
+                                       block_length, output_buffer_raw, 0);
+    } else {
+      res = codec_64_.encodeArray8_int(reinterpret_cast<const uint64_t*>(raw_values),
+                                       block_length, output_buffer_raw, 0);
+    }
     uint32_t segment_size = res - output_buffer_raw;
     // if (i != blocks - 1) {
     //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
@@ -1059,8 +1066,14 @@ void FOREncoder<DType>::Put(const T* buffer, int num_values) {
 
       int block_length = block_size_;
       // if fixed length segment
-      uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
-                                             block_length, output_buffer_raw, 0);
+      uint8_t* res;
+      if (sizeof(T) == 4) {
+        res = codec_32_.encodeArray8_int(reinterpret_cast<const uint32_t*>(raw_values),
+                                         block_length, output_buffer_raw, 0);
+      } else {
+        res = codec_64_.encodeArray8_int(reinterpret_cast<const uint64_t*>(raw_values),
+                                         block_length, output_buffer_raw, 0);
+      }
       uint32_t segment_size = res - output_buffer_raw;
       segment_sizes_.push_back(segment_size);
       output_buffer_size_ += segment_size;
@@ -1120,7 +1133,8 @@ class LecoEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
 
   ::arrow::BufferBuilder sink_;
   int64_t num_values_in_buffer_;
-  Codecset::Leco_int<T> codec_;
+  Codecset::Leco_int<uint32_t> codec_32_;
+  Codecset::Leco_int<uint64_t> codec_64_;
   size_t block_size_;
   ArrowPoolVector<T> buffer_values_;                // values not yet encoded
   std::shared_ptr<ResizableBuffer> output_buffer_;  // encoded buffer
@@ -1158,8 +1172,14 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
   int block_length = buffer_values_.size();
   if (block_length > 0) {
     // if fixed length segment
-    uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
-                                           block_length, output_buffer_raw, 0);
+    uint8_t* res;
+    if (sizeof(T) == 4) {
+      res = codec_32_.encodeArray8_int(reinterpret_cast<const uint32_t*>(raw_values),
+                                       block_length, output_buffer_raw, 0);
+    } else {
+      res = codec_64_.encodeArray8_int(reinterpret_cast<const uint64_t*>(raw_values),
+                                       block_length, output_buffer_raw, 0);
+    }
     uint32_t segment_size = res - output_buffer_raw;
     // if (i != blocks - 1) {
     //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
@@ -1200,8 +1220,14 @@ void LecoEncoder<DType>::Put(const T* buffer, int num_values) {
 
       int block_length = block_size_;
       // if fixed length segment
-      uint8_t* res = codec_.encodeArray8_int(reinterpret_cast<const T*>(raw_values),
-                                             block_length, output_buffer_raw, 0);
+      uint8_t* res;
+      if (sizeof(T) == 4) {
+        res = codec_32_.encodeArray8_int(reinterpret_cast<const uint32_t*>(raw_values),
+                                         block_length, output_buffer_raw, 0);
+      } else {
+        res = codec_64_.encodeArray8_int(reinterpret_cast<const uint64_t*>(raw_values),
+                                         block_length, output_buffer_raw, 0);
+      }
       uint32_t segment_size = res - output_buffer_raw;
       segment_sizes_.push_back(segment_size);
       output_buffer_size_ += segment_size;
@@ -3029,7 +3055,8 @@ class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   void SetData(int num_values, const uint8_t* data, int len) override;
 
  private:
-  Codecset::FOR_int<T> codec_;
+  Codecset::FOR_int<uint32_t> codec_32_;
+  Codecset::FOR_int<uint64_t> codec_64_;
   std::shared_ptr<ResizableBuffer> decoded_buffer_;
   int num_values_in_buffer_{0};
   size_t block_size_{kForBlockSize};
@@ -3108,8 +3135,17 @@ int FORDecoder<DType>::Decode(T* buffer, int max_values) {
       block_length = num_values_ - (blocks - 1) * block_size_;
     }
     input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
-    codec_.decodeArray8(input_data, block_length,
-                        reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+    if (sizeof(T) == 4) {
+      codec_32_.decodeArray8(
+          input_data, block_length,
+          reinterpret_cast<uint32_t*>(output_buffer_raw) + i * block_size_, i);
+    } else {
+      codec_64_.decodeArray8(
+          input_data, block_length,
+          reinterpret_cast<uint64_t*>(output_buffer_raw) + i * block_size_, i);
+    }
+    // codec_.decodeArray8(input_data, block_length,
+    //                     reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
   }
   num_values_in_buffer_ = num_values_;
   decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
@@ -3145,8 +3181,16 @@ int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_tr
          bitpos[bitpos_index_] < (row_index_base_ + num_values_);
        ++bitpos_index_) {
     auto true_pos = bitpos[bitpos_index_] - row_index_base_;
-    T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
-                                           true_pos % block_size_, nullptr, 0);
+    T tmpvalue;
+    if (sizeof(T) == 4) {
+      tmpvalue = codec_32_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+                                              true_pos % block_size_, nullptr, 0);
+    } else {
+      tmpvalue = codec_64_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+                                              true_pos % block_size_, nullptr, 0);
+    }
+    // T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+    //                                        true_pos % block_size_, nullptr, 0);
     *(buffer++) = tmpvalue;
     ++count;
   }
@@ -3201,7 +3245,8 @@ class LecoDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   void SetData(int num_values, const uint8_t* data, int len) override;
 
  private:
-  Codecset::Leco_int<T> codec_;
+  Codecset::Leco_int<uint32_t> codec_32_;
+  Codecset::Leco_int<uint64_t> codec_64_;
   std::shared_ptr<ResizableBuffer> decoded_buffer_;
   int num_values_in_buffer_{0};
   size_t block_size_{kForBlockSize};
@@ -3280,8 +3325,17 @@ int LecoDecoder<DType>::Decode(T* buffer, int max_values) {
       block_length = num_values_ - (blocks - 1) * block_size_;
     }
     input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
-    codec_.decodeArray8(input_data, block_length,
-                        reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+    if (sizeof(T) == 4) {
+      codec_32_.decodeArray8(
+          input_data, block_length,
+          reinterpret_cast<uint32_t*>(output_buffer_raw) + i * block_size_, i);
+    } else {
+      codec_64_.decodeArray8(
+          input_data, block_length,
+          reinterpret_cast<uint64_t*>(output_buffer_raw) + i * block_size_, i);
+    }
+    // codec_.decodeArray8(input_data, block_length,
+    //                     reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
   }
   num_values_in_buffer_ = num_values_;
   decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
@@ -3317,8 +3371,16 @@ int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_t
          bitpos[bitpos_index_] < (row_index_base_ + num_values_);
        ++bitpos_index_) {
     auto true_pos = bitpos[bitpos_index_] - row_index_base_;
-    T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
-                                           true_pos % block_size_, nullptr, 0);
+    T tmpvalue;
+    if (sizeof(T) == 4) {
+      tmpvalue = codec_32_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+                                              true_pos % block_size_, nullptr, 0);
+    } else {
+      tmpvalue = codec_64_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+                                              true_pos % block_size_, nullptr, 0);
+    }
+    // T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+    //                                        true_pos % block_size_, nullptr, 0);
     *(buffer++) = tmpvalue;
     ++count;
   }
