@@ -1289,7 +1289,7 @@ class PlainDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                    std::vector<uint32_t>& bitpos, int64_t row_index,
                    int64_t bitpos_index) override;
-
+  int DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) override;
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
                   typename EncodingTraits<DType>::Accumulator* builder) override;
@@ -1488,6 +1488,16 @@ int PlainDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_
   *value_true_read = count;
   row_index_base_ += num_values_;
   // useless code below
+  data_ += bytes_consumed;
+  len_ -= bytes_consumed;
+  num_values_ -= max_values;
+  return max_values;
+}
+
+template <typename DType>
+int PlainDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) {
+  max_values = std::min(max_values, num_values_);
+  int bytes_consumed = DecodePlain<T>(data_, len_, max_values, type_length_, buffer);
   data_ += bytes_consumed;
   len_ -= bytes_consumed;
   num_values_ -= max_values;
@@ -1877,6 +1887,19 @@ class DictDecoderImpl : public DecoderImpl, virtual public DictDecoder<Type> {
     num_values_ -= num_values;
     return num_values;
   }
+
+  int DecodeFilter(T* buffer, int num_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) override {
+    num_values = std::min(num_values, num_values_);
+    int decoded_values =
+        idx_decoder_.GetBatchWithDict(reinterpret_cast<const T*>(dictionary_->data()),
+                                      dictionary_length_, buffer, num_values);
+    if (decoded_values != num_values) {
+      ParquetException::EofException();
+    }
+    num_values_ -= num_values;
+    return num_values;
+  }
+
 
   int DecodeSpaced(T* buffer, int num_values, int null_count, const uint8_t* valid_bits,
                    int64_t valid_bits_offset) override {
@@ -3043,7 +3066,7 @@ class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                    std::vector<uint32_t>& bitpos, int64_t row_index,
                    int64_t bitpos_index) override;
-
+  int DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) override;
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
                   typename EncodingTraits<DType>::Accumulator* builder) override;
@@ -3205,6 +3228,43 @@ int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_tr
 }
 
 template <typename DType>
+int FORDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  // uint8_t* output_buffer_raw = reinterpret_cast<uint8_t*>(buffer);
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  int total_counter = 0;
+  // uint32_t* bitpos_ptr = reinterpret_cast<uint32_t*>(output_buffer_raw);
+  const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
+  for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_ - (blocks - 1) * block_size_;
+    }
+    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    if (sizeof(T) == 4) {
+      total_counter += codec_32_.filter_range(input_data, block_length, filter_val, bitpos.data() + total_counter, block_size_*i);
+    } else {
+      total_counter += codec_64_.filter_range(input_data, block_length, filter_val, bitpos.data() + total_counter, block_size_*i);
+    }
+  }
+  *filter_count = total_counter;
+  // std::cout<<(double)total_counter/(double)num_values_<<std::endl;
+  num_values_in_buffer_ = num_values_;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return values_to_decode;
+}
+
+template <typename DType>
 int FORDecoder<DType>::DecodeArrow(int num_values, int null_count,
                                    const uint8_t* valid_bits, int64_t valid_bits_offset,
                                    typename EncodingTraits<DType>::Accumulator* builder) {
@@ -3233,7 +3293,7 @@ class LecoDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                    std::vector<uint32_t>& bitpos, int64_t row_index,
                    int64_t bitpos_index) override;
-
+  int DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) override;
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
                   typename EncodingTraits<DType>::Accumulator* builder) override;
@@ -3393,6 +3453,44 @@ int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_t
   num_values_ -= values_to_decode;
   return values_to_decode;
 }
+
+template <typename DType>
+int LecoDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  // uint8_t* output_buffer_raw = reinterpret_cast<uint8_t*>(buffer);
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  int total_counter = 0;
+  const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
+  // uint32_t* bitpos_ptr = reinterpret_cast<uint32_t*>(output_buffer_raw);
+  for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_ - (blocks - 1) * block_size_;
+    }
+    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    if (sizeof(T) == 4) {
+      total_counter += codec_32_.filter_range(input_data, block_length, filter_val, bitpos.data() + total_counter, block_size_*i);
+    } else {
+      total_counter += codec_64_.filter_range(input_data, block_length, filter_val, bitpos.data() + total_counter, block_size_*i);
+    }
+  }
+  *filter_count = total_counter;
+  // std::cout<<(double)total_counter/(double)num_values_<<std::endl;
+  num_values_in_buffer_ = num_values_;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return values_to_decode;
+}
+
 
 template <typename DType>
 int LecoDecoder<DType>::DecodeArrow(

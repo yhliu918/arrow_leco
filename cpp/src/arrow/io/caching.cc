@@ -21,6 +21,7 @@
 #include <mutex>
 #include <utility>
 #include <vector>
+#include<iostream>
 
 #include "arrow/buffer.h"
 #include "arrow/io/caching.h"
@@ -195,7 +196,6 @@ struct ReadRangeCache::Impl {
       static const uint8_t byte = 0;
       return std::make_shared<Buffer>(&byte, 0);
     }
-
     const auto it = std::lower_bound(
         entries.begin(), entries.end(), range,
         [](const RangeCacheEntry& entry, const ReadRange& range) {

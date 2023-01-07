@@ -581,6 +581,10 @@ class ColumnReaderImplBase {
     return num_decoded;
   }
 
+  int64_t ReadValuesFilter(int64_t batch_size, T* out, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) {
+    int64_t num_decoded = current_decoder_->DecodeFilter(out, static_cast<int>(batch_size), filter_val, bitpos, is_gt, filter_count);
+    return num_decoded;
+  }
   // Read up to batch_size values from the current data page into the
   // pre-allocated memory T*, leaving spaces for null entries according
   // to the def_levels.
@@ -919,6 +923,8 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
                           T* values, int64_t* values_read, int64_t* values_true_read,
                           std::vector<uint32_t>& bitpos, int64_t row_index,
                           int64_t bitpos_index) override;
+  int64_t FilterReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+                    T* values, int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) override;
 
   int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, uint8_t* valid_bits, int64_t valid_bits_offset,
@@ -1088,6 +1094,36 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatchBitpos(
   ReadLevels(batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
 
   *values_read = this->ReadValuesBitPos(values_to_read, values, values_true_read, bitpos, row_index, bitpos_index);
+  int64_t total_values = std::max(num_def_levels, *values_read);
+  int64_t expected_values =
+      std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+  if (total_values == 0 && expected_values > 0) {
+    std::stringstream ss;
+    ss << "Read 0 values, expected " << expected_values;
+    ParquetException::EofException(ss.str());
+  }
+  this->ConsumeBufferedValues(total_values);
+
+  return total_values;
+}
+
+template <typename DType>
+int64_t TypedColumnReaderImpl<DType>::FilterReadBatch(int64_t batch_size, int16_t* def_levels,
+                                                int16_t* rep_levels, T* values,
+                                                int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) {
+  // HasNext invokes ReadNewPage
+  if (!HasNext()) {
+    *values_read = 0;
+    return 0;
+  }
+
+  // TODO(wesm): keep reading data pages until batch_size is reached, or the
+  // row group is finished
+  int64_t num_def_levels = 0;
+  int64_t values_to_read = 0;
+  ReadLevels(batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
+
+  *values_read = this->ReadValuesFilter(values_to_read, values, filter_val, bitpos, is_gt, filter_count);
   int64_t total_values = std::max(num_def_levels, *values_read);
   int64_t expected_values =
       std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);

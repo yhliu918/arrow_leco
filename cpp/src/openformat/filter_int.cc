@@ -5,6 +5,7 @@
 
 #include <gperftools/profiler.h>
 #include <parquet/api/reader.h>
+#include <thread>
 #include "arrow/array.h"
 #include "arrow/array/builder_binary.h"
 #include "arrow/array/builder_primitive.h"
@@ -26,15 +27,17 @@
 #include "parquet/exception.h"
 #include "parquet/file_reader.h"
 #include "parquet/properties.h"
+#include "parquet/statistics.h"
 #include "stats.h"
 
 using namespace arrow;
 
-const int DATA_SIZE = 100*1000*1000;
+const int DATA_SIZE = 100 * 1000 * 1000;
 const int BATCH_SIZE = DATA_SIZE;
-uint32_t ROW_GROUP_SIZE = 10*1000*1000;  // Note: can be determined by input params
+uint32_t ROW_GROUP_SIZE = 1 * 1024 * 1024;  // Note: can be determined by input params
 std::string source_file;
 std::string second_file;
+bool bitmap_filter = false;
 
 std::string get_pq_name(parquet::Encoding::type encoding) {
   return "./encoding" + std::to_string(encoding) + "_rowgroup" +
@@ -46,7 +49,6 @@ std::string get_pq_name_mulcol(parquet::Encoding::type encoding) {
          std::to_string(ROW_GROUP_SIZE) + "_datasize" + std::to_string(DATA_SIZE) +
          source_file+"_"+second_file + ".parquet";
 }
-
 arrow::Status encoder_decoder_test(parquet::Encoding::type encoding) {
   std::vector<int64_t> data;
   for (int64_t i = 0; i < DATA_SIZE; ++i) {
@@ -148,7 +150,6 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint64_t>& 
                        std::vector<uint64_t>& b) {
   std::string parquet_name = get_pq_name(encoding);
 
-  // auto schema = arrow::schema({arrow::field("a", arrow::uint64()), arrow::field("b", arrow::uint64())});
   auto schema = arrow::schema({arrow::field("a", arrow::uint64())});
 
   arrow::UInt64Builder aBuilder;
@@ -156,13 +157,23 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint64_t>& 
 
   // arrow::UInt64Builder bBuilder;
   // PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
+  // arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint32_t>& a,
+  //                        std::vector<uint32_t>& b) {
+  //   std::string parquet_name = get_pq_name(encoding);
+
+  //   auto schema = arrow::schema(
+  //       {arrow::field("a", arrow::uint32()), arrow::field("b", arrow::uint32())});
+
+  //   arrow::UInt32Builder aBuilder;
+  //   PARQUET_THROW_NOT_OK(aBuilder.AppendValues(a));
+
+  //   arrow::UInt32Builder bBuilder;
+  //   PARQUET_THROW_NOT_OK(bBuilder.AppendValues(b));
 
   std::shared_ptr<arrow::Array> array_a;
   ARROW_ASSIGN_OR_RAISE(array_a, aBuilder.Finish());
-  // std::shared_ptr<arrow::Array> array_b;
   // ARROW_ASSIGN_OR_RAISE(array_b, bBuilder.Finish());
 
-  // std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {array_a, array_b});
   std::shared_ptr<arrow::Table> table = arrow::Table::Make(schema, {array_a});
   std::shared_ptr<arrow::io::FileOutputStream> outfile;
   PARQUET_ASSIGN_OR_THROW(outfile, arrow::io::FileOutputStream::Open(parquet_name));
@@ -190,7 +201,35 @@ arrow::Status data_gen(parquet::Encoding::type encoding, std::vector<uint64_t>& 
   return arrow::Status::OK();
 }
 
-arrow::Status pure_scan(parquet::Encoding::type encoding,
+arrow::Status async_read_file_w_zonemap_check(parquet::ParquetFileReader* reader,
+                                              int64_t filter_val) {
+  arrow::io::IOContext io_context = arrow::io::default_io_context();
+  arrow::io::CacheOptions cache_options = arrow::io::CacheOptions::Defaults();
+  for (int j = 0; j < reader->metadata()->num_columns(); j++) {
+    for (int i = 0; i < reader->metadata()->num_row_groups(); i++) {
+      auto group_reader = reader->RowGroup(i);
+      auto column_chunk = group_reader->metadata()->ColumnChunk(0);
+      int64_t min = 0;
+      int64_t max = 0;
+      std::shared_ptr<parquet::Statistics> stats = column_chunk->statistics();
+      parquet::Int64Statistics* int_stats =
+          dynamic_cast<parquet::Int64Statistics*>(stats.get());
+      if (int_stats != nullptr) {
+        min = int_stats->min();
+        max = int_stats->max();
+      }
+
+      if (max > filter_val) {
+        reader->PreBuffer({i}, {j}, io_context, cache_options);
+      }
+      // reader->PreBuffer({i}, {j}, io_context, cache_options);
+      reader->WhenBuffered({i}, {j}).Wait();
+    }
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status bitmap_scan(parquet::Encoding::type encoding,
                         std::vector<uint32_t>* bitpos = nullptr) {
   std::string parquet_name = "/root/arrow-private/cpp/out/build/leco-release/release/"+get_pq_name(encoding);
   std::cout<<parquet_name<<std::endl;
@@ -207,7 +246,7 @@ arrow::Status pure_scan(parquet::Encoding::type encoding,
   ARROW_ASSIGN_OR_RAISE(std::unique_ptr<parquet::ParquetFileReader> pq_file_reader,
                         reader_fut.MoveResult());
 
-  std::vector<int> columns = {1};
+  std::vector<int> columns = {0,1};
   if (bitpos == nullptr) {
     parquet::ScanFileContents(columns, BATCH_SIZE, pq_file_reader.get());
   } else {
@@ -221,6 +260,52 @@ arrow::Status pure_scan(parquet::Encoding::type encoding,
     // }
   }
   stats::cout_sec(begin, "pure scan " + std::to_string(encoding));
+  return arrow::Status::OK();
+}
+
+arrow::Status filter_scan(parquet::Encoding::type encoding, int64_t filter_val,
+                          std::vector<uint32_t>& bitpos, bool async_read, bool is_gt = true) {
+  // filter by > filter_val and return the position of matched rows
+  std::string parquet_name = "/root/arrow-private/cpp/out/build/leco-release/release/"+get_pq_name(encoding);
+  std::vector<uint8_t> value_return(sizeof(uint64_t)*DATA_SIZE);
+  if(bitmap_filter){
+    parquet_name =  "/root/arrow-private/cpp/out/build/leco-release/release/"+get_pq_name_mulcol(encoding);
+  }
+  std::cout<<"parquet_name: "<<parquet_name<<std::endl;
+  ARROW_ASSIGN_OR_RAISE(auto input, arrow::io::ReadableFile::Open(
+                                        parquet_name, arrow::default_memory_pool()));
+
+  // Instantiate TableReader from input stream and options
+  std::unique_ptr<parquet::arrow::FileReader> pq_reader;
+
+  // Read table from file
+  auto reader_fut = parquet::ParquetFileReader::OpenAsync(input);
+  ARROW_ASSIGN_OR_RAISE(std::unique_ptr<parquet::ParquetFileReader> pq_file_reader,
+                        reader_fut.MoveResult());
+  std::thread th1;
+  if (async_read) {
+    th1 = std::thread(async_read_file_w_zonemap_check, pq_file_reader.get(), filter_val);
+    th1.join();
+  }
+  // system("cat /proc/$PPID/io");
+  int64_t number_remains = 0;
+  auto begin = stats::Time::now();
+  std::vector<int> columns = {0};
+  parquet::FilterScanFileContents(columns, BATCH_SIZE, pq_file_reader.get(), filter_val,
+                                  bitpos, is_gt, &number_remains);
+  // system("cat /proc/$PPID/io");
+  // stats::cout_sec(begin, "filter scan " + std::to_string(encoding));
+  std::cout<<(double)number_remains/ (double)bitpos.size()<<std::endl;
+  if(bitmap_filter){
+      bitpos.resize(number_remains);
+      std::vector<int> bit_columns = {1};
+      // begin = stats::Time::now();
+      parquet::ScanFileContentsBitpos(bit_columns, BATCH_SIZE, pq_file_reader.get(), bitpos, value_return.data());
+  }
+  stats::cout_sec(begin, "filter scan " + std::to_string(encoding));
+  // if (async_read) {
+  //   th1.join();
+  // }
   return arrow::Status::OK();
 }
 
@@ -267,48 +352,30 @@ static std::vector<T> load_data_binary(const std::string& filename, bool print =
 // normal_200M_uint32.txt bitmap_random_0.01_200000000.txt 0
 arrow::Status RunMain(int argc, char** argv) {
   std::string encoding = argv[1];
-  bool do_bitpos_flag = std::stoi(argv[2]);
-  source_file = std::string(argv[3]);
-  std::string bitmap_name = std::string(argv[4]);
-  bool gen_data_flag = std::stoi(argv[5]);
+  source_file = std::string(argv[2]);
+  bool gen_data_flag = std::stoi(argv[3]);
+  bool use_async_io = std::stoi(argv[4]);
+  int64_t filter_val = 0;
+  if (argc > 5) {
+    ROW_GROUP_SIZE = std::stoi(argv[5]) * 1000 * 1000;
+  }
   if (argc > 6) {
-    ROW_GROUP_SIZE = std::stoi(argv[6]) * 1000 * 1000;
+    parquet::kForBlockSize = std::stoi(argv[6]);
   }
   if (argc > 7) {
-    parquet::kForBlockSize = std::stoi(argv[7]);
+    filter_val = std::atoll(argv[7]);
   }
   if (argc > 8) {
     second_file = std::string(argv[8]);
+    bitmap_filter = true;
   }
-  std::vector<uint32_t> bit_pos;
   // std::vector<uint32_t> bitpos_vec;
-  std::vector<uint32_t>* vec_ptr;
-  if (do_bitpos_flag) {
-    vec_ptr = &bit_pos;
-  } else {
-    vec_ptr = nullptr;
-  }
-  // begin bitmap file in
-  std::ifstream bitFile(
-      "/root/arrow-private/cpp/Learn-to-Compress/data/bitmap_random_cluster/" +
-          bitmap_name,
-      std::ios::in);
-  std::cout << "../data/bitmap_random/" + bitmap_name << std::endl;
-  for (int i = 0;; i++) {
-    uint32_t next;
-    bitFile >> next;
-    if (bitFile.eof()) {
-      break;
-    }
-    if (next) {
-      bit_pos.emplace_back(i);
-    }
-  }
-  bitFile.close();
+  std::vector<uint32_t> vec_ptr(DATA_SIZE);
+
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::PLAIN));
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::FOR));
   // ARROW_RETURN_NOT_OK(encoder_decoder_test(parquet::Encoding::LECO));
-  std::cout << "finish encoding test" << std::endl;
+  // std::cout << "finish encoding test" << std::endl;
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::PLAIN));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::FOR));
   // ARROW_RETURN_NOT_OK(full_scan_test(parquet::Encoding::LECO));
@@ -316,7 +383,7 @@ arrow::Status RunMain(int argc, char** argv) {
   if (gen_data_flag) {
     // begin src file in
     std::vector<uint64_t> data;
-    std::vector<uint64_t> data_2;
+    // std::vector<uint32_t> data;
     if (source_file == "wiki_200M_uint64") {
       auto data_64 = load_data_binary<uint64_t>(
           "/root/arrow-private/cpp/Learn-to-Compress/data/" + source_file);
@@ -325,29 +392,29 @@ arrow::Status RunMain(int argc, char** argv) {
       }
     } else {
       PARQUET_THROW_NOT_OK(get_src_file(data, source_file));
-      // PARQUET_THROW_NOT_OK(get_src_file(data_2, second_file));
     }
 
     if (encoding == "PLAIN") {
-      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::PLAIN, data, data_2));
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::PLAIN, data, data));
     } else if (encoding == "FOR") {
-      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::FOR, data, data_2));
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::FOR, data, data));
     } else if (encoding == "LECO") {
-      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::LECO, data, data_2));
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::LECO, data, data));
     } else if (encoding == "DICT") {
-      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::RLE_DICTIONARY, data, data_2));
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::RLE_DICTIONARY, data, data));
     } else {
       std::cout << "wrong encoding" << std::endl;
     }
   } else {
     if (encoding == "PLAIN") {
-      ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::PLAIN, vec_ptr));
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::PLAIN, filter_val, vec_ptr, use_async_io));
     } else if (encoding == "FOR") {
-      ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::FOR, vec_ptr));
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::FOR, filter_val, vec_ptr, use_async_io));
     } else if (encoding == "LECO") {
-      ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::LECO, vec_ptr));
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::LECO, filter_val, vec_ptr, use_async_io));
     } else if (encoding == "DICT") {
-      ARROW_RETURN_NOT_OK(pure_scan(parquet::Encoding::RLE_DICTIONARY, vec_ptr));
+      ARROW_RETURN_NOT_OK(
+          filter_scan(parquet::Encoding::RLE_DICTIONARY, filter_val, vec_ptr, use_async_io));
     } else {
       std::cout << "wrong encoding" << std::endl;
     }

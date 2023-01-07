@@ -44,6 +44,7 @@
 #include "parquet/platform.h"
 #include "parquet/properties.h"
 #include "parquet/schema.h"
+#include "parquet/statistics.h"
 #include "parquet/types.h"
 
 using arrow::internal::AddWithOverflow;
@@ -306,8 +307,14 @@ class SerializedFile : public ParquetFileReader::Contents {
                  const std::vector<int>& column_indices,
                  const ::arrow::io::IOContext& ctx,
                  const ::arrow::io::CacheOptions& options) {
-    cached_source_ =
-        std::make_shared<::arrow::io::internal::ReadRangeCache>(source_, ctx, options);
+    if (cached_source_ == nullptr) {
+      cached_source_ =
+          std::make_shared<::arrow::io::internal::ReadRangeCache>(source_, ctx, options);
+    }
+
+    // cached_source_ =
+    //     std::make_shared<::arrow::io::internal::ReadRangeCache>(source_, ctx, options);
+
     std::vector<::arrow::io::ReadRange> ranges;
     for (int row : row_groups) {
       for (int col : column_indices) {
@@ -841,6 +848,7 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
 
   for (int r = 0; r < reader->metadata()->num_row_groups(); ++r) {
     auto group_reader = reader->RowGroup(r);
+
     int col = 0;
     for (auto i : columns) {
       std::shared_ptr<ColumnReader> col_reader = group_reader->Column(i);
@@ -861,6 +869,80 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
         // } else {
         //   total_rows[col] += levels_read;
         // }
+      }
+      col++;
+    }
+  }
+
+  for (int i = 1; i < num_columns; ++i) {
+    if (total_rows[0] != total_rows[i]) {
+      throw ParquetException("Parquet error: Total rows among columns do not match");
+    }
+  }
+
+  return total_rows[0];
+}
+
+int64_t FilterScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
+                               ParquetFileReader* reader, int64_t filter_val,
+                               std::vector<uint32_t>& bitpos, bool is_gt,
+                               int64_t* num_remain) {
+  std::vector<int16_t> rep_levels(column_batch_size);
+  std::vector<int16_t> def_levels(column_batch_size);
+
+  int num_columns = static_cast<int>(columns.size());
+
+  // columns are not specified explicitly. Add all columns
+  if (columns.size() == 0) {
+    num_columns = reader->metadata()->num_columns();
+    columns.resize(num_columns);
+    for (int i = 0; i < num_columns; i++) {
+      columns[i] = i;
+    }
+  }
+  if (num_columns == 0) {
+    // If we still have no columns(none in file), return early. The remainder of function
+    // expects there to be at least one column.
+    return 0;
+  }
+
+  std::vector<int64_t> total_rows(num_columns, 0);
+
+  for (int r = 0; r < reader->metadata()->num_row_groups(); ++r) {
+    auto group_reader = reader->RowGroup(r);
+    auto column_chunk = group_reader->metadata()->ColumnChunk(0);
+    bool zonemap_flag = column_chunk->is_stats_set();
+    int64_t min = 0;
+    int64_t max = 0;
+    if (zonemap_flag) {
+      std::shared_ptr<Statistics> stats = column_chunk->statistics();
+      Int64Statistics* int_stats = dynamic_cast<Int64Statistics*>(stats.get());
+      if (int_stats != nullptr) {
+        min = int_stats->min();
+        max = int_stats->max();
+        // std::cout << "min: " << int_stats->min() << " max: " << int_stats->max() <<
+        // std::endl;
+      }
+    }
+
+    int col = 0;
+    for (auto i : columns) {
+      // reader->WhenBuffered({r}, {i}).Wait();
+      if (max > filter_val) {
+        std::shared_ptr<ColumnReader> col_reader = group_reader->Column(i);
+        // size_t value_byte_size = GetTypeByteSize(col_reader->descr()->physical_type());
+        // std::vector<uint8_t> values(column_batch_size * value_byte_size);
+        std::vector<uint8_t> values;
+        int64_t values_read = 0;
+        while (col_reader->HasNext()) {
+          int64_t row_group_filter_remain = 0;
+          int64_t levels_read =
+              FilterScanAllValues(column_batch_size, def_levels.data(), rep_levels.data(),
+                                  values.data(), &values_read, col_reader.get(),
+                                  filter_val, bitpos, is_gt, &row_group_filter_remain);
+          *num_remain += row_group_filter_remain;
+        }
+       
       }
       col++;
     }
@@ -944,7 +1026,7 @@ int64_t ScanFileContentsCheck(std::vector<int> columns, const int32_t column_bat
 }
 
 int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_batch_size,
-                               ParquetFileReader* reader, std::vector<uint32_t>& bitpos) {
+                               ParquetFileReader* reader, std::vector<uint32_t>& bitpos, uint8_t* values) {
   std::vector<int16_t> rep_levels(column_batch_size);
   std::vector<int16_t> def_levels(column_batch_size);
 
@@ -963,7 +1045,7 @@ int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_ba
     // expects there to be at least one column.
     return 0;
   }
-
+  // std::cout<<"num_columns: "<<num_columns<<std::endl;
   std::vector<int64_t> total_rows(num_columns, 0);
   int64_t total_true_read = 0;
   int64_t row_index = 0;
@@ -984,14 +1066,14 @@ int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_ba
       std::shared_ptr<ColumnReader> col_reader = group_reader->Column(i);
       size_t value_byte_size = GetTypeByteSize(col_reader->descr()->physical_type());
       // CAUTION: changed to reduce memory alloc.
-      std::vector<uint8_t> values(bitpos.size() * value_byte_size);
-
+      // std::vector<uint8_t> values(bitpos.size() * value_byte_size);
+      // values.resize(bitpos.size() * value_byte_size);
       int64_t values_read = 0, values_true_read = 0;
       levels_read_this_round = 0;
       total_true_read_this_round = 0;
       while (col_reader->HasNext()) {
         int64_t levels_read = ScanAllValuesBitpos(
-            column_batch_size, def_levels.data(), rep_levels.data(), values.data(),
+            column_batch_size, def_levels.data(), rep_levels.data(), values,
             &values_read, col_reader.get(), &values_true_read, bitpos,
             row_index + levels_read_this_round,
             total_true_read + total_true_read_this_round);
