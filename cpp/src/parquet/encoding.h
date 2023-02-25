@@ -285,7 +285,7 @@ class TypedDecoder : virtual public Decoder {
                            int64_t bitpos_index) {
     ParquetException::NYI("DecodeBitpos not supported for TypedDecoder base class");
   }
-  virtual int DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) {
+  virtual int DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
     ParquetException::NYI("DecodeFilter not supported for TypedDecoder base class");
   }
 

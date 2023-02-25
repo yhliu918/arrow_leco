@@ -179,7 +179,7 @@ class TypedColumnReader : public ColumnReader {
                                   std::vector<uint32_t>& bitpos, int64_t row_index,
                                   int64_t bitpos_index) = 0;
   virtual int64_t FilterReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
-                            T* values, int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count) = 0;
+                            T* values, int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) = 0;
   // virtual int64_t ReadBatchWithSelVec(int64_t batch_size, int16_t* def_levels,
   //                                     int16_t* rep_levels, T* values,
   //                                     int64_t* values_read,

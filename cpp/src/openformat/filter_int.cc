@@ -31,10 +31,11 @@
 #include "stats.h"
 
 using namespace arrow;
-
-const int DATA_SIZE = 100 * 1000 * 1000;
+typedef std::chrono::duration<double> fsec;
+typedef std::chrono::high_resolution_clock Time;
+const int DATA_SIZE = 200 * 1000 * 1000;
 const int BATCH_SIZE = DATA_SIZE;
-uint32_t ROW_GROUP_SIZE = 1 * 1024 * 1024;  // Note: can be determined by input params
+uint32_t ROW_GROUP_SIZE = 10000000;  // Note: can be determined by input params
 std::string source_file;
 std::string second_file;
 bool bitmap_filter = false;
@@ -245,6 +246,7 @@ arrow::Status bitmap_scan(parquet::Encoding::type encoding,
   auto reader_fut = parquet::ParquetFileReader::OpenAsync(input);
   ARROW_ASSIGN_OR_RAISE(std::unique_ptr<parquet::ParquetFileReader> pq_file_reader,
                         reader_fut.MoveResult());
+  double computetime = 0;
 
   std::vector<int> columns = {0,1};
   if (bitpos == nullptr) {
@@ -256,7 +258,7 @@ arrow::Status bitmap_scan(parquet::Encoding::type encoding,
     //   parquet::ScanFileContentsBitposDict(columns, BATCH_SIZE, pq_file_reader.get(),
     //                                       *bitpos);
     // } else {
-    parquet::ScanFileContentsBitpos(columns, BATCH_SIZE, pq_file_reader.get(), *bitpos, value_return.data());
+    parquet::ScanFileContentsBitpos(columns, BATCH_SIZE, pq_file_reader.get(), *bitpos, value_return.data(), &computetime);
     // }
   }
   stats::cout_sec(begin, "pure scan " + std::to_string(encoding));
@@ -264,14 +266,17 @@ arrow::Status bitmap_scan(parquet::Encoding::type encoding,
 }
 
 arrow::Status filter_scan(parquet::Encoding::type encoding, int64_t filter_val,
-                          std::vector<uint32_t>& bitpos, bool async_read, bool is_gt = true) {
+                          std::vector<uint32_t>& bitpos, bool async_read, bool is_gt = true, int64_t filter2=0,int64_t base_val=0) {
   // filter by > filter_val and return the position of matched rows
-  std::string parquet_name = "/root/arrow-private/cpp/out/build/leco-release/release/"+get_pq_name(encoding);
+  if(!is_gt){
+    assert(filter2>filter_val);
+  }
+  std::string parquet_name = "/mnt/"+get_pq_name(encoding);
   std::vector<uint8_t> value_return(sizeof(uint64_t)*DATA_SIZE);
   if(bitmap_filter){
-    parquet_name =  "/root/arrow-private/cpp/out/build/leco-release/release/"+get_pq_name_mulcol(encoding);
+    parquet_name =  "/mnt/"+get_pq_name_mulcol(encoding);
   }
-  std::cout<<"parquet_name: "<<parquet_name<<std::endl;
+  // std::cout<<"parquet_name: "<<parquet_name<<std::endl;
   ARROW_ASSIGN_OR_RAISE(auto input, arrow::io::ReadableFile::Open(
                                         parquet_name, arrow::default_memory_pool()));
 
@@ -289,23 +294,40 @@ arrow::Status filter_scan(parquet::Encoding::type encoding, int64_t filter_val,
   }
   // system("cat /proc/$PPID/io");
   int64_t number_remains = 0;
+  double compute_time = 0;
+  int N = bitpos.size();
   auto begin = stats::Time::now();
   std::vector<int> columns = {0};
-  parquet::FilterScanFileContents(columns, BATCH_SIZE, pq_file_reader.get(), filter_val,
-                                  bitpos, is_gt, &number_remains);
+  // if (encoding == parquet::Encoding::RLE_DICTIONARY
+  //       ||encoding == parquet::Encoding::PLAIN
+  //   ) {
+  //     parquet::FilterScanFileContentsDict(columns, BATCH_SIZE, pq_file_reader.get(), filter_val,
+  //                                 bitpos, is_gt, &number_remains, filter2, &compute_time, base_val, encoding);
+  //   }
+  // else{
+    parquet::FilterScanFileContents(columns, BATCH_SIZE, pq_file_reader.get(), filter_val,
+                                  bitpos, is_gt, &number_remains, filter2, &compute_time, base_val, encoding);
+  // }
   // system("cat /proc/$PPID/io");
   // stats::cout_sec(begin, "filter scan " + std::to_string(encoding));
-  std::cout<<(double)number_remains/ (double)bitpos.size()<<std::endl;
   if(bitmap_filter){
+    std::cout<<"compute time: "<<compute_time<<std::endl;
       bitpos.resize(number_remains);
       std::vector<int> bit_columns = {1};
       // begin = stats::Time::now();
-      parquet::ScanFileContentsBitpos(bit_columns, BATCH_SIZE, pq_file_reader.get(), bitpos, value_return.data());
-  }
-  stats::cout_sec(begin, "filter scan " + std::to_string(encoding));
-  // if (async_read) {
-  //   th1.join();
+  //       if (encoding == parquet::Encoding::RLE_DICTIONARY
+  //       ||encoding == parquet::Encoding::PLAIN
+  //   ) {
+  //     parquet::ScanFileContentsBitposDict(bit_columns, BATCH_SIZE, pq_file_reader.get(), bitpos, value_return.data(), &compute_time);
+  //   }
+  // else{
+      parquet::ScanFileContentsBitpos(bit_columns, BATCH_SIZE, pq_file_reader.get(), bitpos, value_return.data(), &compute_time);
   // }
+  }
+  // stats::cout_sec(begin, "filter scan " + std::to_string(encoding));
+  double total_time = ((fsec)(Time::now() - begin)).count();
+  std::cout<< encoding<<" "<<async_read<<" "<<(double)number_remains/(double)N<<" "<<total_time<<" "<< total_time-compute_time<<std::endl;
+
   return arrow::Status::OK();
 }
 
@@ -356,8 +378,11 @@ arrow::Status RunMain(int argc, char** argv) {
   bool gen_data_flag = std::stoi(argv[3]);
   bool use_async_io = std::stoi(argv[4]);
   int64_t filter_val = 0;
+  int64_t filter2 = INT64_MAX;
+  int64_t base_val = 0;
+  bool open_range = true;
   if (argc > 5) {
-    ROW_GROUP_SIZE = std::stoi(argv[5]) * 1000 * 1000;
+    ROW_GROUP_SIZE = std::stoi(argv[5]);
   }
   if (argc > 6) {
     parquet::kForBlockSize = std::stoi(argv[6]);
@@ -366,7 +391,14 @@ arrow::Status RunMain(int argc, char** argv) {
     filter_val = std::atoll(argv[7]);
   }
   if (argc > 8) {
-    second_file = std::string(argv[8]);
+    open_range = false;
+    filter2 = std::atoll(argv[8]);
+  }
+  if(argc>9){
+    base_val = std::atoll(argv[9]);
+  }
+  if (argc > 10) {
+    second_file = std::string(argv[10]);
     bitmap_filter = true;
   }
   // std::vector<uint32_t> bitpos_vec;
@@ -407,14 +439,14 @@ arrow::Status RunMain(int argc, char** argv) {
     }
   } else {
     if (encoding == "PLAIN") {
-      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::PLAIN, filter_val, vec_ptr, use_async_io));
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::PLAIN, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
     } else if (encoding == "FOR") {
-      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::FOR, filter_val, vec_ptr, use_async_io));
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::FOR, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
     } else if (encoding == "LECO") {
-      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::LECO, filter_val, vec_ptr, use_async_io));
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::LECO, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
     } else if (encoding == "DICT") {
       ARROW_RETURN_NOT_OK(
-          filter_scan(parquet::Encoding::RLE_DICTIONARY, filter_val, vec_ptr, use_async_io));
+          filter_scan(parquet::Encoding::RLE_DICTIONARY, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
     } else {
       std::cout << "wrong encoding" << std::endl;
     }

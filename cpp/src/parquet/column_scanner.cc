@@ -109,16 +109,16 @@ int64_t ScanAllValuesBitpos(int32_t batch_size, int16_t* def_levels, int16_t* re
 
 int64_t FilterScanAllValues(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                       uint8_t* values, int64_t* values_buffered,
-                      parquet::ColumnReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count){
+                      parquet::ColumnReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val){
   switch (reader->type()) {
     case parquet::Type::INT32:
       return FilterScanAll<parquet::Int32Reader>(batch_size, def_levels, rep_levels,
                                                  values, values_buffered, reader,
-                                                 filter_val, bitpos, is_gt, filter_count);
+                                                 filter_val, bitpos, is_gt, filter_count, filter2, base_val);
     case parquet::Type::INT64:
       return FilterScanAll<parquet::Int64Reader>(batch_size, def_levels, rep_levels,
                                                  values, values_buffered, reader,
-                                                 filter_val, bitpos, is_gt, filter_count);
+                                                 filter_val, bitpos, is_gt, filter_count, filter2, base_val);
     default:
       parquet::ParquetException::NYI("type reader not implemented");
   }

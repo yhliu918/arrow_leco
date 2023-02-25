@@ -186,18 +186,21 @@ int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_si
                          ParquetFileReader* reader);
 PARQUET_EXPORT
 int64_t FilterScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
-                         ParquetFileReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count);
+                         ParquetFileReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, double* compute_time, int64_t base_val, parquet::Encoding::type encoding);
+PARQUET_EXPORT
+int64_t FilterScanFileContentsDict(std::vector<int> columns, const int32_t column_batch_size,
+                         ParquetFileReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, double* compute_time, int64_t base_val, parquet::Encoding::type encoding);
 PARQUET_EXPORT
 int64_t ScanFileContentsCheck(std::vector<int> columns, const int32_t column_batch_size,
                               ParquetFileReader* reader, std::vector<int32_t>& a,
                               std::vector<int32_t>& b);
 PARQUET_EXPORT
 int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_batch_size,
-                               ParquetFileReader* reader, std::vector<uint32_t>& bitpos, uint8_t* values);
+                               ParquetFileReader* reader, std::vector<uint32_t>& bitpos, uint8_t* values, double* compute_time);
 
 PARQUET_EXPORT
 int64_t ScanFileContentsBitposDict(std::vector<int> columns,
                                    const int32_t column_batch_size,
                                    ParquetFileReader* reader,
-                                   std::vector<uint32_t>& bitpos);
+                                   std::vector<uint32_t>& bitpos, uint8_t* values, double* computetime);
 }  // namespace parquet
