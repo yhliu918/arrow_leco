@@ -467,8 +467,9 @@ struct Encoding {
     BYTE_STREAM_SPLIT = 9,
     FOR = 10,
     LECO = 11,
+    DELTA=12,
     // Should always be last element (except UNKNOWN)
-    UNDEFINED = 12,
+    UNDEFINED = 13,
     UNKNOWN = 999
   };
 };

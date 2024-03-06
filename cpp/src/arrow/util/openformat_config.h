@@ -1,0 +1,1 @@
+#define OF_STATS_ENABLE 0

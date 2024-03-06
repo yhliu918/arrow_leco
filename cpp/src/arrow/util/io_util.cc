@@ -95,6 +95,10 @@
 #include "arrow/util/checked_cast.h"
 #include "arrow/util/io_util.h"
 #include "arrow/util/logging.h"
+#include "arrow/util/openformat_config.h"
+#if OF_STATS_ENABLE
+#include "arrow/util/openformat_stats.h"
+#endif
 
 // For filename conversion
 #if defined(_WIN32)
@@ -1606,6 +1610,9 @@ Result<int64_t> FileRead(int fd, uint8_t* buffer, int64_t nbytes) {
 }
 
 Result<int64_t> FileReadAt(int fd, uint8_t* buffer, int64_t position, int64_t nbytes) {
+#if OF_STATS_ENABLE
+  auto start = std::chrono::high_resolution_clock::now();
+#endif
   int64_t bytes_read = 0;
 
   while (bytes_read < nbytes) {
@@ -1624,6 +1631,12 @@ Result<int64_t> FileReadAt(int fd, uint8_t* buffer, int64_t position, int64_t nb
     position += ret;
     bytes_read += ret;
   }
+#if OF_STATS_ENABLE
+  arrow::openformat::time_read += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                      std::chrono::high_resolution_clock::now() - start)
+                                      .count();
+  arrow::openformat::num_read++;
+#endif
   return bytes_read;
 }
 

@@ -63,6 +63,7 @@ add_arrow_benchmark(vector_partition_benchmark PREFIX "arrow-compute")
 add_arrow_benchmark(vector_topk_benchmark PREFIX "arrow-compute")
 add_arrow_benchmark(vector_replace_benchmark PREFIX "arrow-compute")
 add_arrow_benchmark(vector_selection_benchmark PREFIX "arrow-compute")
+add_arrow_benchmark(vector_selection_codec_benchmark PREFIX "arrow-compute")
 
 # ----------------------------------------------------------------------
 # Aggregate kernels
@@ -75,7 +76,22 @@ add_arrow_compute_test(aggregate_test
                        hash_aggregate_test.cc
                        test_util.cc)
 add_arrow_benchmark(aggregate_benchmark PREFIX "arrow-compute")
+add_arrow_benchmark(aggregate_codec_benchmark PREFIX "arrow-compute")
 
+add_executable(aggregate_codec aggregate_codec_benchmark.cc)
+target_link_libraries(aggregate_codec arrow_shared GTest::gtest)
+
+add_executable(sort_codec vector_sort_codec.cc)
+target_link_libraries(sort_codec arrow_shared GTest::gtest)
+
+add_executable(take_codec vector_selection_codec_benchmark.cc)
+target_link_libraries(take_codec arrow_shared GTest::gtest ${ARROW_TEST_LINK_LIBS})
+
+add_executable(filter_codec vector_filter_codec_benchmark.cc)
+target_link_libraries(filter_codec arrow_shared GTest::gtest ${ARROW_TEST_LINK_LIBS})
+
+add_executable(groupby_codec aggregate_groupby_codec.cc)
+target_link_libraries(groupby_codec arrow_shared GTest::gtest ${ARROW_TEST_LINK_LIBS})
 # ----------------------------------------------------------------------
 # Utilities
 

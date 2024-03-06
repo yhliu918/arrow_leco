@@ -19,6 +19,8 @@
 
 #include <cstdint>
 #include <sstream>
+#include <fstream>
+#include <sys/time.h>
 
 #include "arrow/compute/api_vector.h"
 #include "arrow/compute/kernels/test_util.h"
@@ -100,6 +102,33 @@ struct FilterArgs {
   benchmark::State& state_;
 };
 
+template <typename T>
+static std::vector<T> load_data(const std::string& filename) {
+    std::vector<T> data;
+    std::ifstream srcFile(filename, std::ios::in);
+    if (!srcFile) {
+        std::cout << "error opening source file." << std::endl;
+        return data;
+    }
+
+    while (srcFile.good()) {
+        T next;
+        srcFile >> next;
+        if (!srcFile.good()) { break; }
+        data.emplace_back(next);
+
+    }
+    srcFile.close();
+
+    return data;
+}
+
+double getNow() {
+  struct timeval tv;
+  gettimeofday(&tv, 0);
+  return tv.tv_sec + tv.tv_usec / 1000000.0;
+}
+
 struct TakeBenchmark {
   benchmark::State& state;
   RegressionArgs args;
@@ -115,9 +144,18 @@ struct TakeBenchmark {
         indices_have_nulls(indices_have_nulls),
         monotonic_indices(monotonic_indices) {}
 
-  void Int64() {
-    auto values = rand.Int64(args.size, -100, 100, args.null_proportion);
-    Bench(values);
+  void Int64(CODEC codec = CODEC::PLAIN) {
+    std::vector<int64_t> data = load_data<int64_t>("/root/arrow-private/cpp/Learn-to-Compress/data/linear_200M_uint32.txt");
+    Int64Builder builder;
+    builder.SetCompress(codec);
+    builder.AppendValues(data.data(), data.size(), nullptr, 1000);
+    std::shared_ptr<Array> out;
+    builder.Finish(&out);
+                   
+    double start = getNow();              
+    Bench(out);
+    double end = getNow();
+    std::cout<<(end - start)<<std::endl;
   }
 
   void FSLInt64() {
@@ -164,11 +202,25 @@ struct FilterBenchmark {
         rand(kSeed),
         filter_has_nulls(filter_has_nulls) {}
 
-  void Int64() {
-    const int64_t array_size = args.size / sizeof(int64_t);
-    auto values = std::static_pointer_cast<NumericArray<Int64Type>>(
-        rand.Int64(array_size, -100, 100, args.values_null_proportion));
-    Bench(values);
+  // void Int64() {
+  //   const int64_t array_size = args.size / sizeof(int64_t);
+  //   auto values = std::static_pointer_cast<NumericArray<Int64Type>>(
+  //       rand.Int64(array_size, -100, 100, args.values_null_proportion));
+  //   Bench(values);
+  // }
+
+  void Int64(CODEC codec = CODEC::PLAIN) {
+    std::vector<int64_t> data = load_data<int64_t>("/root/arrow-private/cpp/Learn-to-Compress/data/linear_200M_uint32.txt");
+    Int64Builder builder;
+    builder.SetCompress(codec);
+    builder.AppendValues(data.data(), data.size(), nullptr, 1000);
+    std::shared_ptr<Array> out;
+    builder.Finish(&out);
+                   
+    double start = getNow();              
+    Bench(out);
+    double end = getNow();
+    std::cout<<(end - start)<<std::endl;
   }
 
   void FSLInt64() {
@@ -200,7 +252,9 @@ struct FilterBenchmark {
     auto filter = rand.Boolean(values->length(), args.selected_proportion,
                                args.filter_null_proportion);
     for (auto _ : state) {
-      ABORT_NOT_OK(Filter(values, filter).status());
+      auto result = Filter(values, filter);
+      const int64_t* result_sq = result->array()->GetValues<int64_t>(1);
+      std::cout<< result_sq[0]<<std::endl;
     }
   }
 
@@ -239,8 +293,16 @@ struct FilterBenchmark {
   }
 };
 
-static void FilterInt64FilterNoNulls(benchmark::State& state) {
-  FilterBenchmark(state, false).Int64();
+static void FilterInt64FilterNoNullsLECO(benchmark::State& state) {
+  FilterBenchmark(state, false).Int64(CODEC::LECO);
+}
+
+static void FilterInt64FilterNoNullsFOR(benchmark::State& state) {
+  FilterBenchmark(state, false).Int64(CODEC::FOR);
+}
+
+static void FilterInt64FilterNoNullsPLAIN(benchmark::State& state) {
+  FilterBenchmark(state, false).Int64(CODEC::PLAIN);
 }
 
 static void FilterInt64FilterWithNulls(benchmark::State& state) {
@@ -273,6 +335,14 @@ static void FilterRecordBatchWithNulls(benchmark::State& state) {
 
 static void TakeInt64RandomIndicesNoNulls(benchmark::State& state) {
   TakeBenchmark(state, false).Int64();
+}
+
+static void TakeInt64RandomIndicesNoNullsFOR(benchmark::State& state) {
+  TakeBenchmark(state, false).Int64(CODEC::FOR);
+}
+
+static void TakeInt64RandomIndicesNoNullsLeCo(benchmark::State& state) {
+  TakeBenchmark(state, false).Int64(CODEC::LECO);
 }
 
 static void TakeInt64RandomIndicesWithNulls(benchmark::State& state) {
@@ -315,12 +385,14 @@ void FilterSetArgs(benchmark::internal::Benchmark* bench) {
   }
 }
 
-BENCHMARK(FilterInt64FilterNoNulls)->Apply(FilterSetArgs);
-BENCHMARK(FilterInt64FilterWithNulls)->Apply(FilterSetArgs);
-BENCHMARK(FilterFSLInt64FilterNoNulls)->Apply(FilterSetArgs);
-BENCHMARK(FilterFSLInt64FilterWithNulls)->Apply(FilterSetArgs);
-BENCHMARK(FilterStringFilterNoNulls)->Apply(FilterSetArgs);
-BENCHMARK(FilterStringFilterWithNulls)->Apply(FilterSetArgs);
+// BENCHMARK(FilterInt64FilterNoNullsPLAIN)->Apply(FilterSetArgs);
+// BENCHMARK(FilterInt64FilterNoNullsFOR)->Apply(FilterSetArgs);
+BENCHMARK(FilterInt64FilterNoNullsLECO)->Apply(FilterSetArgs);
+// BENCHMARK(FilterInt64FilterWithNulls)->Apply(FilterSetArgs);
+// BENCHMARK(FilterFSLInt64FilterNoNulls)->Apply(FilterSetArgs);
+// BENCHMARK(FilterFSLInt64FilterWithNulls)->Apply(FilterSetArgs);
+// BENCHMARK(FilterStringFilterNoNulls)->Apply(FilterSetArgs);
+// BENCHMARK(FilterStringFilterWithNulls)->Apply(FilterSetArgs);
 
 void FilterRecordBatchSetArgs(benchmark::internal::Benchmark* bench) {
   for (auto num_cols : std::vector<int>({10, 50, 100})) {
@@ -329,26 +401,28 @@ void FilterRecordBatchSetArgs(benchmark::internal::Benchmark* bench) {
     }
   }
 }
-BENCHMARK(FilterRecordBatchNoNulls)->Apply(FilterRecordBatchSetArgs);
-BENCHMARK(FilterRecordBatchWithNulls)->Apply(FilterRecordBatchSetArgs);
+// BENCHMARK(FilterRecordBatchNoNulls)->Apply(FilterRecordBatchSetArgs);
+// BENCHMARK(FilterRecordBatchWithNulls)->Apply(FilterRecordBatchSetArgs);
 
 void TakeSetArgs(benchmark::internal::Benchmark* bench) {
   for (int64_t size : g_data_sizes) {
     for (auto nulls : std::vector<ArgsType>({1000, 10, 2, 1, 0})) {
-      bench->Args({static_cast<ArgsType>(size), nulls});
+      bench->Args({static_cast<ArgsType>(size), 0});
     }
   }
 }
 
-BENCHMARK(TakeInt64RandomIndicesNoNulls)->Apply(TakeSetArgs);
-BENCHMARK(TakeInt64RandomIndicesWithNulls)->Apply(TakeSetArgs);
-BENCHMARK(TakeInt64MonotonicIndices)->Apply(TakeSetArgs);
-BENCHMARK(TakeFSLInt64RandomIndicesNoNulls)->Apply(TakeSetArgs);
-BENCHMARK(TakeFSLInt64RandomIndicesWithNulls)->Apply(TakeSetArgs);
-BENCHMARK(TakeFSLInt64MonotonicIndices)->Apply(TakeSetArgs);
-BENCHMARK(TakeStringRandomIndicesNoNulls)->Apply(TakeSetArgs);
-BENCHMARK(TakeStringRandomIndicesWithNulls)->Apply(TakeSetArgs);
-BENCHMARK(TakeStringMonotonicIndices)->Apply(TakeSetArgs);
+// BENCHMARK(TakeInt64RandomIndicesNoNulls)->Apply(TakeSetArgs);
+// BENCHMARK(TakeInt64RandomIndicesNoNullsFOR)->Apply(TakeSetArgs);
+// BENCHMARK(TakeInt64RandomIndicesNoNullsLeCo)->Apply(TakeSetArgs);
+// BENCHMARK(TakeInt64RandomIndicesWithNulls)->Apply(TakeSetArgs);
+// BENCHMARK(TakeInt64MonotonicIndices)->Apply(TakeSetArgs);
+// BENCHMARK(TakeFSLInt64RandomIndicesNoNulls)->Apply(TakeSetArgs);
+// BENCHMARK(TakeFSLInt64RandomIndicesWithNulls)->Apply(TakeSetArgs);
+// BENCHMARK(TakeFSLInt64MonotonicIndices)->Apply(TakeSetArgs);
+// BENCHMARK(TakeStringRandomIndicesNoNulls)->Apply(TakeSetArgs);
+// BENCHMARK(TakeStringRandomIndicesWithNulls)->Apply(TakeSetArgs);
+// BENCHMARK(TakeStringMonotonicIndices)->Apply(TakeSetArgs);
 
 }  // namespace compute
 }  // namespace arrow

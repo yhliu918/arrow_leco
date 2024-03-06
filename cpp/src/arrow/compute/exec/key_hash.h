@@ -47,7 +47,8 @@ class ARROW_EXPORT Hashing32 {
  public:
   static void HashMultiColumn(const std::vector<KeyColumnArray>& cols, LightContext* ctx,
                               uint32_t* out_hash);
-
+  static void HashMultiColumnNew(const std::vector<KeyColumnArray>& cols, LightContext* ctx,
+                              uint32_t* out_hash, CODEC codec, int start_row, int size, uint8_t* outbuff, int* num_remain);
   static Status HashBatch(const ExecBatch& key_batch, uint32_t* hashes,
                           std::vector<KeyColumnArray>& column_arrays,
                           int64_t hardware_flags, util::TempVectorStack* temp_stack,
@@ -64,7 +65,7 @@ class ARROW_EXPORT Hashing32 {
 
   static void HashFixed(int64_t hardware_flags, bool combine_hashes, uint32_t num_keys,
                         uint64_t length_key, const uint8_t* keys, uint32_t* hashes,
-                        uint32_t* temp_hashes_for_combine);
+                        uint32_t* temp_hashes_for_combine,CODEC codec, const uint8_t* nullmap, int start_row, uint8_t* outbuff, int* num_remain);
 
   static void HashVarLen(int64_t hardware_flags, bool combine_hashes, uint32_t num_rows,
                          const uint32_t* offsets, const uint8_t* concatenated_keys,
@@ -111,9 +112,9 @@ class ARROW_EXPORT Hashing32 {
   static void HashBit(bool combine_hashes, int64_t bit_offset, uint32_t num_keys,
                       const uint8_t* keys, uint32_t* hashes);
   template <bool T_COMBINE_HASHES, typename T>
-  static void HashIntImp(uint32_t num_keys, const T* keys, uint32_t* hashes);
+  static void HashIntImp(uint32_t num_keys, const T* keys, uint32_t* hashes,CODEC codec,const uint8_t* nullmap, int start_row, uint8_t* outbuff, int* num_remain);
   static void HashInt(bool combine_hashes, uint32_t num_keys, uint64_t length_key,
-                      const uint8_t* keys, uint32_t* hashes);
+                      const uint8_t* keys, uint32_t* hashes,CODEC codec=CODEC::PLAIN, const uint8_t* nullmap=nullptr, int start_row=0, uint8_t* outbuff=nullptr, int* num_remain=0);
 
 #if defined(ARROW_HAVE_AVX2)
   static inline __m256i Avalanche_avx2(__m256i hash);

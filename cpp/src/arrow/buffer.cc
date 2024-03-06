@@ -195,16 +195,47 @@ Status AllocateEmptyBitmap(int64_t length, std::shared_ptr<Buffer>* out) {
 }
 
 Result<std::shared_ptr<Buffer>> ConcatenateBuffers(
-    const std::vector<std::shared_ptr<Buffer>>& buffers, MemoryPool* pool) {
+    const std::vector<std::shared_ptr<Buffer>>& buffers, MemoryPool* pool, CODEC codec, int length) {
   int64_t out_length = 0;
   for (const auto& buffer : buffers) {
     out_length += buffer->size();
   }
   ARROW_ASSIGN_OR_RAISE(auto out, AllocateBuffer(out_length, pool));
   auto out_data = out->mutable_data();
-  for (const auto& buffer : buffers) {
-    std::memcpy(out_data, buffer->data(), buffer->size());
-    out_data += buffer->size();
+  if(codec == CODEC::PLAIN){
+    for (const auto& buffer : buffers) {
+      std::memcpy(out_data, buffer->data(), buffer->size());
+      out_data += buffer->size();
+    }
+  }
+  else{
+    // LECO or FOR
+    int block_size;
+    memcpy(&block_size, buffers[0]->data()+sizeof(int), sizeof(int));
+    int blocks = length / block_size;
+    int blocks_per_buffer = blocks/buffers.size();
+    int buffer_offset = sizeof(int)*(2+blocks_per_buffer);
+    memcpy(out_data, &blocks, sizeof(int));
+    memcpy(out_data+sizeof(int), &block_size, sizeof(int));
+    int start_pos = sizeof(int)*(2+blocks);
+    int* write_idx = reinterpret_cast<int*>(out_data+sizeof(int)*2);
+    int idx = 0;
+    uint8_t* segment_copy_idx = out_data+start_pos;
+    for (const auto& buffer : buffers) {
+      const int* tmp_pos = reinterpret_cast<const int*>(buffer->data());
+      for(int i = 0; i< blocks_per_buffer-1;i++){
+        int seg_len = tmp_pos[2+i+1] - tmp_pos[2+i];
+        write_idx[idx] = start_pos;
+        start_pos+=seg_len;
+        idx++;
+      }
+      int seg_len = buffer->size() - tmp_pos[1+blocks_per_buffer];
+      write_idx[idx] = start_pos;
+      start_pos+=seg_len;
+      idx++;
+      memcpy(segment_copy_idx, buffer->data()+buffer_offset, buffer->size() - buffer_offset);
+      segment_copy_idx+= (buffer->size() - buffer_offset);
+    }
   }
   return std::move(out);
 }

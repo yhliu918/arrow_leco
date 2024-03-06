@@ -117,7 +117,7 @@ class RleDecoder {
 
   /// Gets a batch of values.  Returns the number of decoded elements.
   template <typename T>
-  int GetBatch(T* values, int batch_size);
+  __attribute__((noinline)) int GetBatch(T* values, int batch_size);
 
   /// Like GetBatch but add spacing for null entries
   template <typename T>
@@ -150,7 +150,7 @@ class RleDecoder {
   /// Fills literal_count_ and repeat_count_ with next values. Returns false if there
   /// are no more.
   template <typename T>
-  bool NextCounts();
+  __attribute__((noinline)) bool NextCounts();
 
   /// Utility methods for retrieving spaced values.
   template <typename T, typename RunType, typename Converter>
@@ -299,7 +299,7 @@ inline bool RleDecoder::Get(T* val) {
 }
 
 template <typename T>
-inline int RleDecoder::GetBatch(T* values, int batch_size) {
+int RleDecoder::GetBatch(T* values, int batch_size) {
   DCHECK_GE(bit_width_, 0);
   int values_read = 0;
 
@@ -311,6 +311,9 @@ inline int RleDecoder::GetBatch(T* values, int batch_size) {
     if (repeat_count_ > 0) {  // Repeated value case.
       int repeat_batch = std::min(remaining, repeat_count_);
       std::fill(out, out + repeat_batch, static_cast<T>(current_value_));
+      // for (int i = 0; i < repeat_batch; ++i) {
+      //   out[i] = static_cast<T>(current_value_);
+      // }
 
       repeat_count_ -= repeat_batch;
       values_read += repeat_batch;

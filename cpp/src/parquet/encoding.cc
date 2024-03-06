@@ -30,7 +30,14 @@
 
 #include "FOR_integer_template.h"
 #include "arrow/array.h"
+#include "arrow/buffer.h"
+#include "arrow/array/builder_binary.h"
+#include "arrow/array/builder_decimal.h"
 #include "arrow/array/builder_dict.h"
+#include "arrow/array/builder_nested.h"
+#include "arrow/array/builder_primitive.h"
+#include "arrow/array/builder_dict.h"
+#include "arrow/array/data.h"
 #include "arrow/buffer.h"
 #include "arrow/stl_allocator.h"
 #include "arrow/type_traits.h"
@@ -62,11 +69,21 @@ using arrow::VisitNullBitmapInline;
 using arrow::internal::AddWithOverflow;
 using arrow::internal::checked_cast;
 using arrow::util::string_view;
+using arrow::Array;
+using arrow::DataType;
+using arrow::ArrayData;
+using arrow::ArraySpan;
+using arrow::Buffer;
+using arrow::CODEC;
+using ArrowId = arrow::Type;
+using arrowint64 = arrow::Int64Type;
+
 
 template <typename T>
 using ArrowPoolVector = std::vector<T, ::arrow::stl::allocator<T>>;
 
 namespace parquet {
+
 size_t kForBlockSize = 2000;
 namespace {
 
@@ -982,6 +999,7 @@ class FOREncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
   Codecset::FOR_int<uint32_t> codec_32_;
   Codecset::FOR_int<uint64_t> codec_64_;
   size_t block_size_;
+  int block_num_per_flush;
   ArrowPoolVector<T> buffer_values_;                // values not yet encoded
   std::shared_ptr<ResizableBuffer> output_buffer_;  // encoded buffer
   // std::shared_ptr<ResizableBuffer> segment_size_buffer_; // segment size buffer
@@ -995,12 +1013,14 @@ FOREncoder<DType>::FOREncoder(const ColumnDescriptor* descr, ::arrow::MemoryPool
       sink_{pool},
       num_values_in_buffer_{0},
       block_size_(kForBlockSize),
+      block_num_per_flush(0),
       buffer_values_(::arrow::stl::allocator<T>(pool)),
       // FIXME(xinyu): hardcode 400MB buffer for now.
       output_buffer_(AllocateBuffer(pool, 400 * 1024 * 1024)),
       segment_sizes_(::arrow::stl::allocator<T>(pool)),
       output_buffer_size_(0) {
   segment_sizes_.push_back(0);
+  segment_sizes_.push_back(kForBlockSize);
 }
 
 template <typename DType>
@@ -1031,14 +1051,23 @@ std::shared_ptr<Buffer> FOREncoder<DType>::FlushValues() {
     //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
     //   output_buffer_raw += sizeof(uint32_t);
     // }
+    block_num_per_flush++;
     output_buffer_size_ += segment_size;
     buffer_values_.clear();
   }
   ARROW_CHECK_OK(output_buffer_->Resize(output_buffer_size_));
   // build segment sizes buffer and concat and return
-  if (block_length == 0) {
-    segment_sizes_.pop_back();
+  // if (block_length == 0) {
+  //   segment_sizes_.pop_back();
+  // }
+  // std::cout<<"output_buffer_size_:"<<output_buffer_size_<<std::endl;
+  int start_postition = sizeof(int)*2+sizeof(int)*block_num_per_flush;
+  for(int i =2; i<segment_sizes_.size();i++){
+    int temp_size = segment_sizes_[i];
+    segment_sizes_[i] = start_postition;
+    start_postition+=temp_size;
   }
+  segment_sizes_[0] = block_num_per_flush;
   std::shared_ptr<ResizableBuffer> segment_sizes_buffer =
       AllocateBuffer(pool_, segment_sizes_.size() * sizeof(uint32_t));
   memcpy(segment_sizes_buffer->mutable_data(), &segment_sizes_[0],
@@ -1076,6 +1105,7 @@ void FOREncoder<DType>::Put(const T* buffer, int num_values) {
       }
       uint32_t segment_size = res - output_buffer_raw;
       segment_sizes_.push_back(segment_size);
+      block_num_per_flush++;
       output_buffer_size_ += segment_size;
       // eliminate the first [block_size_] elements in buffer_values_
       ArrowPoolVector<T>(buffer_values_.begin() + block_size_, buffer_values_.end())
@@ -1098,6 +1128,175 @@ void FOREncoder<DType>::PutSpaced(const T* src, int num_values, const uint8_t* v
                                   int64_t valid_bits_offset) {
   throw ParquetException("PutSpaced not implemented");
 }
+
+
+// ----------------------------------------------------------------------
+// DeltaEncoder<T> implementations
+
+template <typename DType>
+class DeltaEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
+ public:
+  using T = typename DType::c_type;
+  using TypedEncoder<DType>::Put;
+
+  explicit DeltaEncoder(const ColumnDescriptor* descr,
+                      ::arrow::MemoryPool* pool = ::arrow::default_memory_pool());
+
+  int64_t EstimatedDataEncodedSize() override;
+  std::shared_ptr<Buffer> FlushValues() override;
+
+  void Put(const T* buffer, int num_values) override;
+  void Put(const ::arrow::Array& values) override;
+  void PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
+                 int64_t valid_bits_offset) override;
+
+ protected:
+  template <typename ArrowType>
+  void PutImpl(const ::arrow::Array& values) {
+    if (values.type_id() != ArrowType::type_id) {
+      throw ParquetException(std::string() + "direct put to " + ArrowType::type_name() +
+                             " from " + values.type()->ToString() + " not supported");
+    }
+    const auto& data = *values.data();
+    PutSpaced(data.GetValues<typename ArrowType::c_type>(1),
+              static_cast<int>(data.length), data.GetValues<uint8_t>(0, 0), data.offset);
+  }
+
+  ::arrow::BufferBuilder sink_;
+  int64_t num_values_in_buffer_;
+  Codecset::Delta_int<uint32_t> codec_32_;
+  Codecset::Delta_int<uint64_t> codec_64_;
+  size_t block_size_;
+  int block_num_per_flush;
+  ArrowPoolVector<T> buffer_values_;                // values not yet encoded
+  std::shared_ptr<ResizableBuffer> output_buffer_;  // encoded buffer
+  // std::shared_ptr<ResizableBuffer> segment_size_buffer_; // segment size buffer
+  ArrowPoolVector<uint32_t> segment_sizes_;  // segment sizes
+  uint64_t output_buffer_size_;              // size of output_buffer_ in bytes
+};
+
+template <typename DType>
+DeltaEncoder<DType>::DeltaEncoder(const ColumnDescriptor* descr, ::arrow::MemoryPool* pool)
+    : EncoderImpl(descr, Encoding::DELTA, pool),
+      sink_{pool},
+      num_values_in_buffer_{0},
+      block_size_(kForBlockSize),
+      block_num_per_flush(0),
+      buffer_values_(::arrow::stl::allocator<T>(pool)),
+      // FIXME(xinyu): hardcode 400MB buffer for now.
+      output_buffer_(AllocateBuffer(pool, 400 * 1024 * 1024)),
+      segment_sizes_(::arrow::stl::allocator<T>(pool)),
+      output_buffer_size_(0) {
+  segment_sizes_.push_back(0);
+  segment_sizes_.push_back(kForBlockSize);
+}
+
+template <typename DType>
+int64_t DeltaEncoder<DType>::EstimatedDataEncodedSize() {
+  return output_buffer_size_ +                             // encoded size
+         sizeof(uint32_t) * (segment_sizes_.size() + 1) +  // block_start size
+         sizeof(T) * buffer_values_.size();                // unencoded size
+}
+
+template <typename DType>
+std::shared_ptr<Buffer> DeltaEncoder<DType>::FlushValues() {
+  uint8_t* output_buffer_raw = output_buffer_->mutable_data() + output_buffer_size_;
+  const uint8_t* raw_values = (const uint8_t*)&buffer_values_[0];
+
+  int block_length = buffer_values_.size();
+  if (block_length > 0) {
+    // if fixed length segment
+    uint8_t* res;
+    if (sizeof(T) == 4) {
+      res = codec_32_.encodeArray8_int(reinterpret_cast<const uint32_t*>(raw_values),
+                                       block_length, output_buffer_raw, 0);
+    } else {
+      res = codec_64_.encodeArray8_int(reinterpret_cast<const uint64_t*>(raw_values),
+                                       block_length, output_buffer_raw, 0);
+    }
+    uint32_t segment_size = res - output_buffer_raw;
+    // if (i != blocks - 1) {
+    //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
+    //   output_buffer_raw += sizeof(uint32_t);
+    // }
+    block_num_per_flush++;
+    output_buffer_size_ += segment_size;
+    buffer_values_.clear();
+  }
+  ARROW_CHECK_OK(output_buffer_->Resize(output_buffer_size_));
+  // build segment sizes buffer and concat and return
+  // if (block_length == 0) {
+  //   segment_sizes_.pop_back();
+  // }
+  int start_postition = sizeof(int)*2+sizeof(int)*block_num_per_flush;
+  for(int i =2; i<segment_sizes_.size();i++){
+    int temp_size = segment_sizes_[i];
+    segment_sizes_[i] = start_postition;
+    start_postition+=temp_size;
+  }
+  segment_sizes_[0] = block_num_per_flush;
+  std::shared_ptr<ResizableBuffer> segment_sizes_buffer =
+      AllocateBuffer(pool_, segment_sizes_.size() * sizeof(uint32_t));
+  memcpy(segment_sizes_buffer->mutable_data(), &segment_sizes_[0],
+         segment_sizes_.size() * sizeof(uint32_t));
+  ::arrow::BufferVector buff_vec;
+  buff_vec.push_back(segment_sizes_buffer);
+  buff_vec.push_back(output_buffer_);
+  auto result_buff = ConcatenateBuffers(buff_vec, pool_).ValueOrDie();
+  segment_sizes_.clear();
+  segment_sizes_.push_back(0);
+  ARROW_CHECK_OK(output_buffer_->Resize(200 * 1024 * 1024));
+  output_buffer_size_ = 0;
+  return std::move(result_buff);
+}
+
+template <typename DType>
+void DeltaEncoder<DType>::Put(const T* buffer, int num_values) {
+  if (num_values > 0) {
+    // PARQUET_THROW_NOT_OK(sink_.Append(buffer, num_values * sizeof(T)));
+    buffer_values_.insert(buffer_values_.end(), buffer, buffer + num_values);
+    num_values_in_buffer_ += num_values;
+    while (buffer_values_.size() >= block_size_) {
+      uint8_t* output_buffer_raw = output_buffer_->mutable_data() + output_buffer_size_;
+      const uint8_t* raw_values = (const uint8_t*)&buffer_values_[0];
+
+      int block_length = block_size_;
+      // if fixed length segment
+      uint8_t* res;
+      if (sizeof(T) == 4) {
+        res = codec_32_.encodeArray8_int(reinterpret_cast<const uint32_t*>(raw_values),
+                                         block_length, output_buffer_raw, 0);
+      } else {
+        res = codec_64_.encodeArray8_int(reinterpret_cast<const uint64_t*>(raw_values),
+                                         block_length, output_buffer_raw, 0);
+      }
+      uint32_t segment_size = res - output_buffer_raw;
+      segment_sizes_.push_back(segment_size);
+      block_num_per_flush++;
+      output_buffer_size_ += segment_size;
+      // eliminate the first [block_size_] elements in buffer_values_
+      ArrowPoolVector<T>(buffer_values_.begin() + block_size_, buffer_values_.end())
+          .swap(buffer_values_);
+    }
+  }
+}
+template <>
+void DeltaEncoder<Int32Type>::Put(const ::arrow::Array& values) {
+  throw ParquetException("Put from array not implemented");
+}
+
+template <>
+void DeltaEncoder<Int64Type>::Put(const ::arrow::Array& values) {
+  throw ParquetException("Put from array not implemented");
+}
+
+template <typename DType>
+void DeltaEncoder<DType>::PutSpaced(const T* src, int num_values, const uint8_t* valid_bits,
+                                  int64_t valid_bits_offset) {
+  throw ParquetException("PutSpaced not implemented");
+}
+
+
 
 // ----------------------------------------------------------------------
 // LecoEncoder<T> implementations
@@ -1136,6 +1335,7 @@ class LecoEncoder : public EncoderImpl, virtual public TypedEncoder<DType> {
   Codecset::Leco_int<uint32_t> codec_32_;
   Codecset::Leco_int<uint64_t> codec_64_;
   size_t block_size_;
+  int blocks_per_flush;
   ArrowPoolVector<T> buffer_values_;                // values not yet encoded
   std::shared_ptr<ResizableBuffer> output_buffer_;  // encoded buffer
   // std::shared_ptr<ResizableBuffer> segment_size_buffer_; // segment size buffer
@@ -1149,12 +1349,14 @@ LecoEncoder<DType>::LecoEncoder(const ColumnDescriptor* descr, ::arrow::MemoryPo
       sink_{pool},
       num_values_in_buffer_{0},
       block_size_(kForBlockSize),
+      blocks_per_flush(0),
       buffer_values_(::arrow::stl::allocator<T>(pool)),
       // FIXME(xinyu): hardcode 200MB buffer for now.
       output_buffer_(AllocateBuffer(pool, 200 * 1024 * 1024)),
       segment_sizes_(::arrow::stl::allocator<T>(pool)),
       output_buffer_size_(0) {
   segment_sizes_.push_back(0);
+  segment_sizes_.push_back(block_size_);
 }
 
 template <typename DType>
@@ -1181,6 +1383,7 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
                                        block_length, output_buffer_raw, 0);
     }
     uint32_t segment_size = res - output_buffer_raw;
+    blocks_per_flush++;
     // if (i != blocks - 1) {
     //   memcpy(output_buffer_raw, &segment_size, sizeof(uint32_t));
     //   output_buffer_raw += sizeof(uint32_t);
@@ -1190,9 +1393,17 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
   }
   ARROW_CHECK_OK(output_buffer_->Resize(output_buffer_size_));
   // build segment sizes buffer and concat and return
-  if (block_length == 0) {
-    segment_sizes_.pop_back();
+  // if (block_length == 0) {
+  //   segment_sizes_.pop_back();
+  // }
+  // std::cout<<"output_buffer_size_:"<<output_buffer_size_<<std::endl;
+  int start_postition = sizeof(int)*2+sizeof(int)*blocks_per_flush;
+  for(int i =2; i<segment_sizes_.size();i++){
+    int temp_size = segment_sizes_[i];
+    segment_sizes_[i] = start_postition;
+    start_postition+=temp_size;
   }
+  segment_sizes_[0] = blocks_per_flush;
   std::shared_ptr<ResizableBuffer> segment_sizes_buffer =
       AllocateBuffer(pool_, segment_sizes_.size() * sizeof(uint32_t));
   memcpy(segment_sizes_buffer->mutable_data(), &segment_sizes_[0],
@@ -1200,6 +1411,7 @@ std::shared_ptr<Buffer> LecoEncoder<DType>::FlushValues() {
   ::arrow::BufferVector buff_vec;
   buff_vec.push_back(segment_sizes_buffer);
   buff_vec.push_back(output_buffer_);
+
   auto result_buff = ConcatenateBuffers(buff_vec, pool_).ValueOrDie();
   segment_sizes_.clear();
   segment_sizes_.push_back(0);
@@ -1230,7 +1442,9 @@ void LecoEncoder<DType>::Put(const T* buffer, int num_values) {
       }
       uint32_t segment_size = res - output_buffer_raw;
       segment_sizes_.push_back(segment_size);
+      blocks_per_flush++;
       output_buffer_size_ += segment_size;
+      // std::cout<<"output_buffer_size_:"<<output_buffer_size_<<std::endl;
       // eliminate the first [block_size_] elements in buffer_values_
       ArrowPoolVector<T>(buffer_values_.begin() + block_size_, buffer_values_.end())
           .swap(buffer_values_);
@@ -1286,11 +1500,12 @@ class PlainDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
   explicit PlainDecoder(const ColumnDescriptor* descr);
 
   int Decode(T* buffer, int max_values) override;
+  std::shared_ptr<ArraySpan> ArrowDecode(const uint8_t* values, int max_values) override;
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                    std::vector<uint32_t>& bitpos, int64_t row_index,
                    int64_t bitpos_index) override;
   int DecodeFilter(T* buffer, int max_values, int64_t filter_val,
-                   std::vector<uint32_t>& bitpos, bool open_range, int64_t* filter_count,
+                   uint32_t* bitpos, bool open_range, int64_t* filter_count,
                    int64_t filter2, int64_t base_val) override;
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
@@ -1325,6 +1540,7 @@ inline int PlainDecoder<BooleanType>::DecodeArrow(
     typename EncodingTraits<BooleanType>::DictAccumulator* builder) {
   ParquetException::NYI("dictionaries of BooleanType");
 }
+
 
 template <typename DType>
 int PlainDecoder<DType>::DecodeArrow(
@@ -1471,6 +1687,34 @@ int PlainDecoder<DType>::Decode(T* buffer, int max_values) {
 }
 
 template <typename DType>
+std::shared_ptr<ArraySpan> PlainDecoder<DType>::ArrowDecode( const uint8_t* values, int max_values) {
+  const int values_to_decode = std::min(max_values, num_values_);
+
+  values = data_;
+  uint8_t* value = new uint8_t[num_values_*10];
+  Decode(reinterpret_cast<T*>(value),max_values);
+  std::shared_ptr<Buffer> array_tmp = std::make_shared<Buffer>(value,max_values*sizeof(T));
+  std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, array_tmp};
+  std::shared_ptr<ArrayData> data;
+  if (sizeof(DType) == 4){
+    data = ArrayData::Make(::arrow::int32(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+  }
+  else{
+    data = ArrayData::Make(::arrow::int64(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+  }
+  
+  ArraySpan data_span(*data);                                
+  
+
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return std::make_shared<ArraySpan>(data_span);
+}
+
+template <typename DType>
 int PlainDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                                       std::vector<uint32_t>& bitpos, int64_t row_index,
                                       int64_t bitpos_index) {
@@ -1498,7 +1742,7 @@ int PlainDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_
 
 template <typename DType>
 int PlainDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val,
-                                      std::vector<uint32_t>& bitpos, bool open_range,
+                                      uint32_t* bitpos, bool open_range,
                                       int64_t* filter_count, int64_t filter2, int64_t base_val) {
   max_values = std::min(max_values, num_values_);
   int count = 0;
@@ -1921,7 +2165,7 @@ class DictDecoderImpl : public DecoderImpl, virtual public DictDecoder<Type> {
   }
 
   int DecodeFilter(T* buffer, int num_values, int64_t filter_val,
-                   std::vector<uint32_t>& bitpos, bool open_range, int64_t* filter_count,
+                   uint32_t* bitpos, bool open_range, int64_t* filter_count,
                    int64_t filter2, int64_t base_val) override {
     num_values = std::min(num_values, num_values_);
     int count = 0;
@@ -3131,11 +3375,12 @@ class FORDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
                       MemoryPool* pool = ::arrow::default_memory_pool());
 
   int Decode(T* buffer, int max_values) override;
+  std::shared_ptr<ArraySpan> ArrowDecode(const uint8_t* values, int max_values) override;
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                    std::vector<uint32_t>& bitpos, int64_t row_index,
                    int64_t bitpos_index) override;
   int DecodeFilter(T* buffer, int max_values, int64_t filter_val,
-                   std::vector<uint32_t>& bitpos, bool open_range, int64_t* filter_count,
+                   uint32_t* bitpos, bool open_range, int64_t* filter_count,
                    int64_t filter2, int64_t base_val) override;
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
@@ -3165,46 +3410,6 @@ template <typename DType>
 FORDecoder<DType>::FORDecoder(const ColumnDescriptor* descr, MemoryPool* pool)
     : DecoderImpl(descr, Encoding::FOR), decoded_buffer_(AllocateBuffer(pool, 0)) {}
 
-// template <typename DType>
-// void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
-//   DecoderImpl::SetData(num_values, data, len);
-//   ARROW_CHECK_OK(decoded_buffer_->Resize(num_values * sizeof(T)));
-//   uint8_t* output_buffer_raw = decoded_buffer_->mutable_data();
-//   int blocks = num_values / block_size_;
-//   if (blocks * block_size_ < num_values) {
-//     blocks++;
-//   }
-//   const uint8_t* input_data = data_ + blocks * sizeof(T);
-//   for (int i = 0; i < blocks; i++) {
-//     int block_length = block_size_;
-//     if (i == blocks - 1) {
-//       block_length = num_values - (blocks - 1) * block_size_;
-//     }
-//     input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
-//     codec_.decodeArray8(input_data, block_length,
-//                         reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
-//   }
-//   num_values_in_buffer_ = num_values;
-//   decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
-// }
-
-// template <typename DType>
-// int FORDecoder<DType>::Decode(T* buffer, int max_values) {
-//   const int values_to_decode = std::min(num_values_, max_values);
-//   const int num_decoded_previously = num_values_in_buffer_ - num_values_;
-//   // const uint8_t* data = data_ + num_decoded_previously;
-
-//   // ::arrow::util::internal::ByteStreamSplitDecode<T>(data, values_to_decode,
-//   //                                                   num_values_in_buffer_, buffer);
-//   // int bytes_consumed =
-//   //     DecodePlain<T>(data_, len_, values_to_decode, type_length_, buffer);
-//   memcpy(buffer, decoded_values_ + num_decoded_previously, values_to_decode *
-//   sizeof(T)); num_values_ -= values_to_decode;
-//   // data_ += bytes_consumed;
-//   // len_ -= bytes_consumed;
-//   return values_to_decode;
-// }
-
 template <typename DType>
 void FORDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
   DecoderImpl::SetData(num_values, data, len);
@@ -3227,7 +3432,7 @@ int FORDecoder<DType>::Decode(T* buffer, int max_values) {
     if (i == blocks - 1) {
       block_length = num_values_ - (blocks - 1) * block_size_;
     }
-    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    input_data = data_+ *(reinterpret_cast<const uint32_t*>(data_) + i+2);
     if (sizeof(T) == 4) {
       codec_32_.decodeArray8(
           input_data, block_length,
@@ -3250,6 +3455,43 @@ int FORDecoder<DType>::Decode(T* buffer, int max_values) {
 }
 
 template <typename DType>
+std::shared_ptr<ArraySpan> FORDecoder<DType>::ArrowDecode( const uint8_t* values, int max_values) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  values = data_;
+  uint8_t* value = new uint8_t[num_values_*8];
+  memcpy(value, data_, len_);
+  std::shared_ptr<Buffer> array_tmp = std::make_shared<Buffer>(value,len_);
+  std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, array_tmp};
+  std::shared_ptr<ArrayData> data;
+  if (sizeof(DType) == 4){
+    data = std::make_shared<ArrayData>(::arrow::int32(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::FOR);
+  }
+  else{
+    data = std::make_shared<ArrayData>(::arrow::int64(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::FOR);
+  }
+  
+  ArraySpan data_span(*data);                                
+  
+
+  num_values_in_buffer_ = num_values_;
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return std::make_shared<ArraySpan>(data_span);
+}
+
+
+template <typename DType>
 int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                                     std::vector<uint32_t>& bitpos, int64_t row_index,
                                     int64_t bitpos_index) {
@@ -3266,7 +3508,7 @@ int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_tr
   const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
   std::vector<const uint8_t*> block_start_vec;
   for (int i = 0; i < blocks; ++i) {
-    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    input_data = data_+*(reinterpret_cast<const uint32_t*>(data_) + i+2);
     block_start_vec.push_back(input_data);
   }
   int count = 0;
@@ -3299,7 +3541,7 @@ int FORDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_tr
 
 template <typename DType>
 int FORDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val,
-                                    std::vector<uint32_t>& bitpos, bool open_range,
+                                    uint32_t* bitpos, bool open_range,
                                     int64_t* filter_count, int64_t filter2, int64_t base_val) {
   if (max_values < num_values_) {
     ParquetException::EofException(
@@ -3319,15 +3561,15 @@ int FORDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_va
     if (i == blocks - 1) {
       block_length = num_values_ - (blocks - 1) * block_size_;
     }
-    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    input_data = data_+ *(reinterpret_cast<const uint32_t*>(data_) + i+2);
     if (sizeof(T) == 4) {
       total_counter +=
           codec_32_.filter_range(input_data, block_length, filter_val,
-                                 bitpos.data() + total_counter, block_size_ * i);
+                                 bitpos + total_counter, block_size_ * i);
     } else {
       total_counter +=
           codec_64_.filter_range(input_data, block_length, filter_val,
-                                 bitpos.data() + total_counter, block_size_ * i);
+                                 bitpos + total_counter, block_size_ * i);
     }
   }
   }else{
@@ -3336,29 +3578,29 @@ int FORDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_va
     if (i == blocks - 1) {
       block_length = num_values_ - (blocks - 1) * block_size_;
     }
-    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    input_data = data_+*(reinterpret_cast<const uint32_t*>(data_) + i+2);
     if (sizeof(T) == 4) {
       if(base_val){
         total_counter +=
           codec_32_.filter_range_close_mod(input_data, block_length,
-                                 bitpos.data() + total_counter, block_size_ * i, filter_val, filter2, base_val);
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2, base_val);
       }
       else{
         total_counter +=
           codec_32_.filter_range_close(input_data, block_length,
-                                 bitpos.data() + total_counter, block_size_ * i, filter_val, filter2);
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2);
       }
       
     } else {
       if(base_val){
         total_counter +=
           codec_64_.filter_range_close_mod(input_data, block_length,
-                                 bitpos.data() + total_counter, block_size_ * i, filter_val, filter2, base_val);
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2, base_val);
       }
       else{
         total_counter +=
           codec_64_.filter_range_close(input_data, block_length,
-                                 bitpos.data() + total_counter, block_size_ * i, filter_val, filter2);
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2);
       }
     }
   }
@@ -3389,6 +3631,273 @@ int FORDecoder<DType>::DecodeArrow(
 }
 
 // ----------------------------------------------------------------------
+// Delta Decoder
+
+template <typename DType>
+class DeltaDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
+ public:
+  using T = typename DType::c_type;
+  explicit DeltaDecoder(const ColumnDescriptor* descr,
+                      MemoryPool* pool = ::arrow::default_memory_pool());
+
+  int Decode(T* buffer, int max_values) override;
+  std::shared_ptr<ArraySpan> ArrowDecode(const uint8_t* values, int max_values) override;
+  int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
+                   std::vector<uint32_t>& bitpos, int64_t row_index,
+                   int64_t bitpos_index) override;
+  int DecodeFilter(T* buffer, int max_values, int64_t filter_val,
+                   uint32_t* bitpos, bool open_range, int64_t* filter_count,
+                   int64_t filter2, int64_t base_val) override;
+  int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
+                  int64_t valid_bits_offset,
+                  typename EncodingTraits<DType>::Accumulator* builder) override;
+
+  int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
+                  int64_t valid_bits_offset,
+                  typename EncodingTraits<DType>::DictAccumulator* builder) override;
+
+  void SetData(int num_values, const uint8_t* data, int len) override;
+
+ private:
+  Codecset::Delta_int<uint32_t> codec_32_;
+  Codecset::Delta_int<uint64_t> codec_64_;
+  std::shared_ptr<ResizableBuffer> decoded_buffer_;
+  int num_values_in_buffer_{0};
+  size_t block_size_{kForBlockSize};
+  const T* decoded_values_{nullptr};
+  // This value is the sum of # of values decoded so far. Note that we set BATCH_SIZE to
+  // very large so that each batch must read an entire page.
+  // FIXME(xinyu): This should be put into base class to avoid bugs. Put it here for now.
+  uint32_t row_index_base_ = 0;
+  size_t bitpos_index_ = 0;
+};
+
+template <typename DType>
+DeltaDecoder<DType>::DeltaDecoder(const ColumnDescriptor* descr, MemoryPool* pool)
+    : DecoderImpl(descr, Encoding::DELTA), decoded_buffer_(AllocateBuffer(pool, 0)) {}
+
+template <typename DType>
+void DeltaDecoder<DType>::SetData(int num_values, const uint8_t* data, int len) {
+  DecoderImpl::SetData(num_values, data, len);
+}
+
+template <typename DType>
+int DeltaDecoder<DType>::Decode(T* buffer, int max_values) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  uint8_t* output_buffer_raw = reinterpret_cast<uint8_t*>(buffer);
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
+  for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_ - (blocks - 1) * block_size_;
+    }
+    input_data = data_+ *(reinterpret_cast<const uint32_t*>(data_) + i+2);
+    if (sizeof(T) == 4) {
+      codec_32_.decodeArray8(
+          input_data, block_length,
+          reinterpret_cast<uint32_t*>(output_buffer_raw) + i * block_size_, i);
+    } else {
+      codec_64_.decodeArray8(
+          input_data, block_length,
+          reinterpret_cast<uint64_t*>(output_buffer_raw) + i * block_size_, i);
+    }
+    // codec_.decodeArray8(input_data, block_length,
+    //                     reinterpret_cast<T*>(output_buffer_raw) + i * block_size_, i);
+  }
+  num_values_in_buffer_ = num_values_;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return values_to_decode;
+}
+
+template <typename DType>
+std::shared_ptr<ArraySpan> DeltaDecoder<DType>::ArrowDecode( const uint8_t* values, int max_values) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  values = data_;
+  uint8_t* value = new uint8_t[num_values_*8];
+  memcpy(value, data_, len_);
+  std::shared_ptr<Buffer> array_tmp = std::make_shared<Buffer>(value,len_);
+  std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, array_tmp};
+  std::shared_ptr<ArrayData> data;
+  if (sizeof(DType) == 4){
+    data = std::make_shared<ArrayData>(::arrow::int32(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::FOR);
+  }
+  else{
+    data = std::make_shared<ArrayData>(::arrow::int64(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::FOR);
+  }
+  
+  ArraySpan data_span(*data);                                
+  
+
+  num_values_in_buffer_ = num_values_;
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return std::make_shared<ArraySpan>(data_span);
+}
+
+
+template <typename DType>
+int DeltaDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
+                                    std::vector<uint32_t>& bitpos, int64_t row_index,
+                                    int64_t bitpos_index) {
+  row_index_base_ = row_index;
+  bitpos_index_ = bitpos_index;
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
+  std::vector<const uint8_t*> block_start_vec;
+  for (int i = 0; i < blocks; ++i) {
+    input_data = data_+*(reinterpret_cast<const uint32_t*>(data_) + i+2);
+    block_start_vec.push_back(input_data);
+  }
+  int count = 0;
+  for (; bitpos_index_ < bitpos.size() &&
+         bitpos[bitpos_index_] < (row_index_base_ + num_values_);
+       ++bitpos_index_) {
+    auto true_pos = bitpos[bitpos_index_] - row_index_base_;
+    T tmpvalue;
+    if (sizeof(T) == 4) {
+      tmpvalue = codec_32_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+                                              true_pos % block_size_, nullptr, 0);
+    } else {
+      tmpvalue = codec_64_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+                                              true_pos % block_size_, nullptr, 0);
+    }
+    // T tmpvalue = codec_.randomdecodeArray8(block_start_vec[true_pos / block_size_],
+    //                                        true_pos % block_size_, nullptr, 0);
+    *(buffer++) = tmpvalue;
+    ++count;
+  }
+  *value_true_read = count;
+  row_index_base_ += num_values_;
+  // 0816 random access impl: seems useless below
+  num_values_in_buffer_ = num_values_;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  return values_to_decode;
+}
+
+template <typename DType>
+int DeltaDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val,
+                                    uint32_t* bitpos, bool open_range,
+                                    int64_t* filter_count, int64_t filter2, int64_t base_val) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  // uint8_t* output_buffer_raw = reinterpret_cast<uint8_t*>(buffer);
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  int total_counter = 0;
+  // uint32_t* bitpos_ptr = reinterpret_cast<uint32_t*>(output_buffer_raw);
+  const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
+  if(open_range){
+  for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_ - (blocks - 1) * block_size_;
+    }
+    input_data = data_+ *(reinterpret_cast<const uint32_t*>(data_) + i+2);
+    if (sizeof(T) == 4) {
+      total_counter +=
+          codec_32_.filter_range(input_data, block_length, filter_val,
+                                 bitpos + total_counter, block_size_ * i);
+    } else {
+      total_counter +=
+          codec_64_.filter_range(input_data, block_length, filter_val,
+                                 bitpos + total_counter, block_size_ * i);
+    }
+  }
+  }else{
+    for (int i = 0; i < blocks; i++) {
+    int block_length = block_size_;
+    if (i == blocks - 1) {
+      block_length = num_values_ - (blocks - 1) * block_size_;
+    }
+    input_data = data_+*(reinterpret_cast<const uint32_t*>(data_) + i+2);
+    if (sizeof(T) == 4) {
+      if(base_val){
+        total_counter +=
+          codec_32_.filter_range_close_mod(input_data, block_length,
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2, base_val);
+      }
+      else{
+        total_counter +=
+          codec_32_.filter_range_close(input_data, block_length,
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2);
+      }
+      
+    } else {
+      if(base_val){
+        total_counter +=
+          codec_64_.filter_range_close_mod(input_data, block_length,
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2, base_val);
+      }
+      else{
+        total_counter +=
+          codec_64_.filter_range_close(input_data, block_length,
+                                 bitpos + total_counter, block_size_ * i, filter_val, filter2);
+      }
+    }
+  }
+  }
+  *filter_count = total_counter;
+  // std::cout<<(double)total_counter/(double)num_values_<<std::endl;
+  num_values_in_buffer_ = num_values_;
+  decoded_values_ = reinterpret_cast<const T*>(decoded_buffer_->data());
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return values_to_decode;
+}
+
+template <typename DType>
+int DeltaDecoder<DType>::DecodeArrow(int num_values, int null_count,
+                                   const uint8_t* valid_bits, int64_t valid_bits_offset,
+                                   typename EncodingTraits<DType>::Accumulator* builder) {
+  ParquetException::NYI("DecodeArrow for DeltaDecoder");
+}
+
+template <typename DType>
+int DeltaDecoder<DType>::DecodeArrow(
+    int num_values, int null_count, const uint8_t* valid_bits, int64_t valid_bits_offset,
+    typename EncodingTraits<DType>::DictAccumulator* builder) {
+  ParquetException::NYI("DecodeArrow for DeltaDecoder");
+}
+
+
+// ----------------------------------------------------------------------
 // Leco Decoder
 
 template <typename DType>
@@ -3400,11 +3909,13 @@ class LecoDecoder : public DecoderImpl, virtual public TypedDecoder<DType> {
 
   int Decode(T* buffer, int max_values) override;
 
+  std::shared_ptr<ArraySpan> ArrowDecode( const uint8_t* values, int max_values) override;
+
   int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                    std::vector<uint32_t>& bitpos, int64_t row_index,
                    int64_t bitpos_index) override;
   int DecodeFilter(T* buffer, int max_values, int64_t filter_val,
-                   std::vector<uint32_t>& bitpos, bool open_range, int64_t* filter_count,
+                   uint32_t* bitpos, bool open_range, int64_t* filter_count,
                    int64_t filter2, int64_t base_val) override;
   int DecodeArrow(int num_values, int null_count, const uint8_t* valid_bits,
                   int64_t valid_bits_offset,
@@ -3490,13 +4001,13 @@ int LecoDecoder<DType>::Decode(T* buffer, int max_values) {
   if (blocks * block_size_ < num_values_) {
     blocks++;
   }
-  const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
+  const uint8_t* input_data = data_;
   for (int i = 0; i < blocks; i++) {
     int block_length = block_size_;
     if (i == blocks - 1) {
       block_length = num_values_ - (blocks - 1) * block_size_;
     }
-    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    input_data = data_ + *(reinterpret_cast<const uint32_t*>(data_) + i+2);
     if (sizeof(T) == 4) {
       codec_32_.decodeArray8(
           input_data, block_length,
@@ -3518,6 +4029,43 @@ int LecoDecoder<DType>::Decode(T* buffer, int max_values) {
   return values_to_decode;
 }
 
+
+template <typename DType>
+std::shared_ptr<ArraySpan> LecoDecoder<DType>::ArrowDecode( const uint8_t* values, int max_values) {
+  if (max_values < num_values_) {
+    ParquetException::EofException(
+        "The current implementation expect decode all at once");
+  }
+  int blocks = num_values_ / block_size_;
+  if (blocks * block_size_ < num_values_) {
+    blocks++;
+  }
+  values = data_;
+  // uint8_t* value = new uint8_t[num_values_*8];
+  // memcpy(value, data_, len_);
+  std::shared_ptr<Buffer> array_tmp = std::make_shared<Buffer>(values,len_);
+  std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, array_tmp};
+  std::shared_ptr<ArrayData> data;
+  if (sizeof(DType) == 4){
+    data = ArrayData::Make(::arrow::int32(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::LECO);
+  }
+  else{
+    data = ArrayData::Make(::arrow::int64(), num_values_,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::LECO);
+  }
+  
+  ArraySpan data_span(*data);                                
+  
+
+  num_values_in_buffer_ = num_values_;
+  const int values_to_decode = std::min(num_values_, max_values);
+  num_values_ -= values_to_decode;
+  // data_ += bytes_consumed;
+  // len_ -= bytes_consumed;
+  return std::make_shared<ArraySpan>(data_span);
+}
+
 template <typename DType>
 int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                                      std::vector<uint32_t>& bitpos, int64_t row_index,
@@ -3535,7 +4083,7 @@ int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_t
   const uint8_t* input_data = data_ + blocks * sizeof(uint32_t);
   std::vector<const uint8_t*> block_start_vec;
   for (int i = 0; i < blocks; ++i) {
-    input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+    input_data = data_ + *(reinterpret_cast<const uint32_t*>(data_) + i+2);
     block_start_vec.push_back(input_data);
   }
   int count = 0;
@@ -3568,7 +4116,7 @@ int LecoDecoder<DType>::DecodeBitpos(T* buffer, int max_values, int64_t* value_t
 
 template <typename DType>
 int LecoDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_val,
-                                     std::vector<uint32_t>& bitpos, bool open_range,
+                                     uint32_t* bitpos, bool open_range,
                                      int64_t* filter_count, int64_t filter2, int64_t base_val) {
   if (max_values < num_values_) {
     ParquetException::EofException(
@@ -3588,15 +4136,15 @@ int LecoDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_v
       if (i == blocks - 1) {
         block_length = num_values_ - (blocks - 1) * block_size_;
       }
-      input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+      input_data = data_+*(reinterpret_cast<const uint32_t*>(data_) + i+2);
       if (sizeof(T) == 4) {
         total_counter +=
             codec_32_.filter_range(input_data, block_length, filter_val,
-                                   bitpos.data() + total_counter, block_size_ * i);
+                                   bitpos + total_counter, block_size_ * i);
       } else {
         total_counter +=
             codec_64_.filter_range(input_data, block_length, filter_val,
-                                   bitpos.data() + total_counter, block_size_ * i);
+                                   bitpos + total_counter, block_size_ * i);
       }
     }
   } else {
@@ -3605,15 +4153,15 @@ int LecoDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_v
       if (i == blocks - 1) {
         block_length = num_values_ - (blocks - 1) * block_size_;
       }
-      input_data += *(reinterpret_cast<const uint32_t*>(data_) + i);
+      input_data = data_+ *(reinterpret_cast<const uint32_t*>(data_) + i+2);
       if (sizeof(T) == 4) {
         if(base_val){
           total_counter += codec_32_.filter_range_close_mod(
-            input_data, block_length, bitpos.data() + total_counter, block_size_ * i,
+            input_data, block_length, bitpos + total_counter, block_size_ * i,
             filter_val, filter2, base_val);
         }else{
           total_counter += codec_32_.filter_range_close(
-            input_data, block_length, bitpos.data() + total_counter, block_size_ * i,
+            input_data, block_length, bitpos + total_counter, block_size_ * i,
             filter_val, filter2);
         }
         
@@ -3621,11 +4169,11 @@ int LecoDecoder<DType>::DecodeFilter(T* buffer, int max_values, int64_t filter_v
         if(base_val){
           // std::cout<<i<<" "<<total_counter<<" "<<filter_val<<" "<<filter2<<" "<<base_val<<std::endl;
           total_counter += codec_64_.filter_range_close_mod(
-            input_data, block_length, bitpos.data() + total_counter, block_size_ * i,
+            input_data, block_length, bitpos + total_counter, block_size_ * i,
             filter_val, filter2, base_val);
         }else{
           total_counter += codec_64_.filter_range_close(
-            input_data, block_length, bitpos.data() + total_counter, block_size_ * i,
+            input_data, block_length, bitpos + total_counter, block_size_ * i,
             filter_val, filter2);
         }
       }
@@ -3738,6 +4286,16 @@ std::unique_ptr<Encoder> MakeEncoder(Type::type type_num, Encoding::type encodin
         throw ParquetException("FOR only supports INT32 and INT64");
         break;
     }
+  } else if (encoding == Encoding::DELTA) {
+    switch (type_num) {
+      case Type::INT32:
+        return std::unique_ptr<Encoder>(new DeltaEncoder<Int32Type>(descr, pool));
+      case Type::INT64:
+        return std::unique_ptr<Encoder>(new DeltaEncoder<Int64Type>(descr, pool));
+      default:
+        throw ParquetException("FOR only supports INT32 and INT64");
+        break;
+    }
   } else {
     ParquetException::NYI("Selected encoding is not supported");
   }
@@ -3818,6 +4376,16 @@ std::unique_ptr<Decoder> MakeDecoder(Type::type type_num, Encoding::type encodin
         throw ParquetException("Leco only supports INT32 and INT64");
         break;
     }
+  } else if (encoding == Encoding::DELTA) {
+    switch (type_num) {
+      case Type::INT32:
+        return std::unique_ptr<Decoder>(new DeltaDecoder<Int32Type>(descr));
+      case Type::INT64:
+        return std::unique_ptr<Decoder>(new DeltaDecoder<Int64Type>(descr));
+      default:
+        throw ParquetException("Leco only supports INT32 and INT64");
+        break;
+    }
   } else {
     ParquetException::NYI("Selected encoding is not supported");
   }
@@ -3855,3 +4423,4 @@ std::unique_ptr<Decoder> MakeDictDecoder(Type::type type_num,
 
 }  // namespace detail
 }  // namespace parquet
+

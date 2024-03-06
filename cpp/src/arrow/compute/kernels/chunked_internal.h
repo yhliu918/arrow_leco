@@ -66,7 +66,17 @@ struct ChunkedArrayResolver : protected ::arrow::internal::ChunkResolver {
       : ::arrow::internal::ChunkResolver(other.chunks_), chunks_(other.chunks_) {}
 
   explicit ChunkedArrayResolver(const std::vector<const Array*>& chunks)
-      : ::arrow::internal::ChunkResolver(chunks), chunks_(chunks) {}
+      : ::arrow::internal::ChunkResolver(chunks), chunks_(chunks) {
+        compression_type = (chunks[0])->data()->compression_type;
+        if(compression_type!=CODEC::PLAIN){
+          block_size = (chunks[0])->data()->GetValues<int>(1)[1]*(chunks[0])->data()->GetValues<int>(1)[0];
+          for(auto item: chunks){
+            ArraySpan tmpspan(*(item->data()));
+            chunks_span.push_back(std::move(std::make_shared<ArraySpan>(tmpspan)));
+
+          }
+        }
+      }
 
   template <typename ArrayType>
   ResolvedChunk<ArrayType> Resolve(int64_t index) const {
@@ -74,8 +84,18 @@ struct ChunkedArrayResolver : protected ::arrow::internal::ChunkResolver {
     return {checked_cast<const ArrayType*>(chunks_[loc.chunk_index]), loc.index_in_chunk};
   }
 
+  template <typename ArrayType>
+  ArrayType ResolveCompress(int64_t index) const {
+      ArrayType val = chunks_span[int(index/block_size)]->GetSingleValue<ArrayType>(1, index%block_size);
+      return val;
+  }
+
  protected:
   const std::vector<const Array*> chunks_;
+  std::vector<std::shared_ptr<ArraySpan>> chunks_span;
+  CODEC compression_type;
+  int block_size;
+
 };
 
 inline std::vector<const Array*> GetArrayPointers(const ArrayVector& arrays) {

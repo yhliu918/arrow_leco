@@ -136,12 +136,12 @@ def run_exp():
                             break
                     sleep(1)
             # books, 199999994 bitmap, 200 block size
-            exp_file_unit(out_file_name, output_stats, encoding, books, 199999994, 200)
+            # exp_file_unit(out_file_name, output_stats, encoding, books, 199999994, 200)
             # wiki large
             # exp_file_unit(out_file_name, output_stats, encoding, wiki_200M, 200000000, 200)
             # ml
-            exp_file_unit(out_file_name, output_stats, encoding, ml, 200000000, 140, for_64=True)
-            exp_file_unit(out_file_name, output_stats, encoding, possion, 200015910, 88, for_64=True)
+            exp_file_unit(out_file_name, output_stats, encoding, ml, 200000000, 10000, for_64=True)
+            # exp_file_unit(out_file_name, output_stats, encoding, possion, 200015910, 88, for_64=True)
             # fb, 289K bitmap, 289 block size
             # exp_file_unit(out_file_name, output_stats, encoding, fb, 289000, 289)
             # wiki, 2076K bitmap, 2076 block size

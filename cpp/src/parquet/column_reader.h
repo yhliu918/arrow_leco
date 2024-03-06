@@ -28,7 +28,8 @@
 #include "parquet/properties.h"
 #include "parquet/schema.h"
 #include "parquet/types.h"
-
+#include "arrow/array/data.h"
+using arrow::ArraySpan;
 namespace arrow {
 
 class Array;
@@ -105,11 +106,13 @@ class PARQUET_EXPORT PageReader {
 
   static std::unique_ptr<PageReader> Open(
       std::shared_ptr<ArrowInputStream> stream, int64_t total_num_rows,
-      Compression::type codec, ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
+      Compression::type codec, bool always_compressed = false,
+      ::arrow::MemoryPool* pool = ::arrow::default_memory_pool(),
       const CryptoContext* ctx = NULLPTR);
   static std::unique_ptr<PageReader> Open(std::shared_ptr<ArrowInputStream> stream,
                                           int64_t total_num_rows, Compression::type codec,
                                           const ReaderProperties& properties,
+                                          bool always_compressed = false,
                                           const CryptoContext* ctx = NULLPTR);
 
   // @returns: shared_ptr<Page>(nullptr) on EOS, std::shared_ptr<Page>
@@ -129,6 +132,8 @@ class PARQUET_EXPORT ColumnReader {
 
   // Returns true if there are still values in this column.
   virtual bool HasNext() = 0;
+
+  virtual std::shared_ptr<ArraySpan> ReadPage() = 0;
 
   virtual Type::type type() const = 0;
 
@@ -173,13 +178,16 @@ class TypedColumnReader : public ColumnReader {
   // @returns: actual number of levels read (see values_read for number of values read)
   virtual int64_t ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                             T* values, int64_t* values_read) = 0;
+  virtual std::shared_ptr<ArraySpan> ReadBatchArrow(int64_t batch_size, int16_t* def_levels,
+                                                int16_t* rep_levels, const uint8_t* values,
+                                                int64_t* values_read)  = 0;
   virtual int64_t ReadBatchBitpos(int64_t batch_size, int16_t* def_levels,
                                   int16_t* rep_levels, T* values, int64_t* values_read,
                                   int64_t* values_true_read,
                                   std::vector<uint32_t>& bitpos, int64_t row_index,
                                   int64_t bitpos_index) = 0;
   virtual int64_t FilterReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
-                            T* values, int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) = 0;
+                            T* values, int64_t* values_read, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) = 0;
   // virtual int64_t ReadBatchWithSelVec(int64_t batch_size, int16_t* def_levels,
   //                                     int16_t* rep_levels, T* values,
   //                                     int64_t* values_read,

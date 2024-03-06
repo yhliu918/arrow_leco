@@ -22,12 +22,15 @@
 #include <string>
 #include <vector>
 
+#include "arrow/array/array_base.h"
+#include "arrow/array/data.h"
 #include "arrow/io/caching.h"
 #include "arrow/util/type_fwd.h"
 #include "parquet/metadata.h"  // IWYU pragma: keep
 #include "parquet/platform.h"
 #include "parquet/properties.h"
-
+using arrow::ArraySpan;
+using arrow::Array;
 namespace parquet {
 
 class ColumnReader;
@@ -183,7 +186,13 @@ ReadMetaData(const std::shared_ptr<::arrow::io::RandomAccessFile>& source);
 /// \return number of semantic rows in file
 PARQUET_EXPORT
 int64_t ScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
-                         ParquetFileReader* reader);
+                         ParquetFileReader* reader,uint8_t* result_data=nullptr);
+PARQUET_EXPORT
+int64_t ScanFileContentsArrow(std::vector<int> columns, const int32_t column_batch_size,
+                         ParquetFileReader* reader, uint8_t* result_data, std::vector<std::shared_ptr<ArraySpan>>* total_array, std::vector<std::shared_ptr<ColumnReader>>* col_readers, double* compute_time);
+PARQUET_EXPORT
+int64_t ScanFileContentsArrowSum(std::vector<int> columns, const int32_t column_batch_size,
+                         ParquetFileReader* reader, double* compute_time, std::vector<uint8_t>* btimap);                        
 PARQUET_EXPORT
 int64_t FilterScanFileContents(std::vector<int> columns, const int32_t column_batch_size,
                          ParquetFileReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, double* compute_time, int64_t base_val, parquet::Encoding::type encoding);
@@ -197,7 +206,12 @@ int64_t ScanFileContentsCheck(std::vector<int> columns, const int32_t column_bat
 PARQUET_EXPORT
 int64_t ScanFileContentsBitpos(std::vector<int> columns, const int32_t column_batch_size,
                                ParquetFileReader* reader, std::vector<uint32_t>& bitpos, uint8_t* values, double* compute_time);
-
+PARQUET_EXPORT
+int64_t ScanFileContentsBitposOld(std::vector<int> columns, const int32_t column_batch_size,
+                               ParquetFileReader* reader, std::vector<uint32_t>& bitpos,
+                               std::vector<int16_t>& rep_levels,
+                               std::vector<int16_t>& def_levels,
+                               std::vector<uint8_t>& values, double* compute_time);
 PARQUET_EXPORT
 int64_t ScanFileContentsBitposDict(std::vector<int> columns,
                                    const int32_t column_batch_size,

@@ -310,8 +310,9 @@ arrow::Status filter_scan(parquet::Encoding::type encoding, int64_t filter_val,
   // }
   // system("cat /proc/$PPID/io");
   // stats::cout_sec(begin, "filter scan " + std::to_string(encoding));
+  std::cout<<number_remains<<std::endl;
   if(bitmap_filter){
-    std::cout<<"compute time: "<<compute_time<<std::endl;
+    // std::cout<<"compute time: "<<compute_time<<std::endl;
       bitpos.resize(number_remains);
       std::vector<int> bit_columns = {1};
       // begin = stats::Time::now();
@@ -416,7 +417,7 @@ arrow::Status RunMain(int argc, char** argv) {
     // begin src file in
     std::vector<uint64_t> data;
     // std::vector<uint32_t> data;
-    if (source_file == "wiki_200M_uint64") {
+    if (source_file == "fb_200M_uint64"|| source_file == "wiki_200M_uint64") {
       auto data_64 = load_data_binary<uint64_t>(
           "/root/arrow-private/cpp/Learn-to-Compress/data/" + source_file);
       for (auto& d : data_64) {
@@ -432,6 +433,8 @@ arrow::Status RunMain(int argc, char** argv) {
       ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::FOR, data, data));
     } else if (encoding == "LECO") {
       ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::LECO, data, data));
+    } else if (encoding == "DELTA") {
+      ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::DELTA, data, data));
     } else if (encoding == "DICT") {
       ARROW_RETURN_NOT_OK(data_gen(parquet::Encoding::RLE_DICTIONARY, data, data));
     } else {
@@ -444,6 +447,8 @@ arrow::Status RunMain(int argc, char** argv) {
       ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::FOR, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
     } else if (encoding == "LECO") {
       ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::LECO, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
+    } else if (encoding == "DELTA") {
+      ARROW_RETURN_NOT_OK(filter_scan(parquet::Encoding::DELTA, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));
     } else if (encoding == "DICT") {
       ARROW_RETURN_NOT_OK(
           filter_scan(parquet::Encoding::RLE_DICTIONARY, filter_val, vec_ptr, use_async_io, open_range, filter2, base_val));

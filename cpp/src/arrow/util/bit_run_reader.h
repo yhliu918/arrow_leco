@@ -497,6 +497,7 @@ inline void VisitSetBitRunsVoid(const uint8_t* bitmap, int64_t offset, int64_t l
   }
 }
 
+
 template <typename Visit>
 inline Status VisitSetBitRuns(const std::shared_ptr<Buffer>& bitmap, int64_t offset,
                               int64_t length, Visit&& visit) {

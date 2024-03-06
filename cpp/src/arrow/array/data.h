@@ -26,9 +26,13 @@
 #include "arrow/buffer.h"
 #include "arrow/result.h"
 #include "arrow/type.h"
+#include "arrow/type_traits.h"
 #include "arrow/util/bit_util.h"
 #include "arrow/util/macros.h"
 #include "arrow/util/visibility.h"
+#include "arrow/leco/FOR_integer_template.h"
+#include "arrow/leco/piecewise_fix_integer_template.h"
+#include "arrow/leco/delta_integer_template.h"
 
 namespace arrow {
 
@@ -81,11 +85,13 @@ struct ARROW_EXPORT ArrayData {
             int64_t null_count = kUnknownNullCount, int64_t offset = 0)
       : type(std::move(type)), length(length), null_count(null_count), offset(offset) {}
 
+
   ArrayData(std::shared_ptr<DataType> type, int64_t length,
             std::vector<std::shared_ptr<Buffer>> buffers,
-            int64_t null_count = kUnknownNullCount, int64_t offset = 0)
+            int64_t null_count = kUnknownNullCount, int64_t offset = 0, CODEC codec=CODEC::PLAIN)
       : ArrayData(std::move(type), length, null_count, offset) {
     this->buffers = std::move(buffers);
+    this->compression_type = codec;
   }
 
   ArrayData(std::shared_ptr<DataType> type, int64_t length,
@@ -100,7 +106,7 @@ struct ARROW_EXPORT ArrayData {
   static std::shared_ptr<ArrayData> Make(std::shared_ptr<DataType> type, int64_t length,
                                          std::vector<std::shared_ptr<Buffer>> buffers,
                                          int64_t null_count = kUnknownNullCount,
-                                         int64_t offset = 0);
+                                         int64_t offset = 0, CODEC codec=CODEC::PLAIN);
 
   static std::shared_ptr<ArrayData> Make(
       std::shared_ptr<DataType> type, int64_t length,
@@ -126,7 +132,8 @@ struct ARROW_EXPORT ArrayData {
         offset(other.offset),
         buffers(std::move(other.buffers)),
         child_data(std::move(other.child_data)),
-        dictionary(std::move(other.dictionary)) {
+        dictionary(std::move(other.dictionary)),
+        compression_type(other.compression_type) {
     SetNullCount(other.null_count);
   }
 
@@ -137,7 +144,8 @@ struct ARROW_EXPORT ArrayData {
         offset(other.offset),
         buffers(other.buffers),
         child_data(other.child_data),
-        dictionary(other.dictionary) {
+        dictionary(other.dictionary),
+        compression_type(other.compression_type) {
     SetNullCount(other.null_count);
   }
 
@@ -150,6 +158,7 @@ struct ARROW_EXPORT ArrayData {
     buffers = std::move(other.buffers);
     child_data = std::move(other.child_data);
     dictionary = std::move(other.dictionary);
+    compression_type = other.compression_type;
     return *this;
   }
 
@@ -162,6 +171,7 @@ struct ARROW_EXPORT ArrayData {
     buffers = other.buffers;
     child_data = other.child_data;
     dictionary = other.dictionary;
+    compression_type = other.compression_type;
     return *this;
   }
 
@@ -181,6 +191,7 @@ struct ARROW_EXPORT ArrayData {
   inline const T* GetValues(int i) const {
     return GetValues<T>(i, offset);
   }
+
 
   // Like GetValues, but returns NULLPTR instead of aborting if the underlying
   // buffer is not a CPU buffer.
@@ -233,6 +244,9 @@ struct ARROW_EXPORT ArrayData {
     return null_count.load() != 0 && buffers[0] != NULLPTR;
   }
 
+  void SetCompressionType(CODEC codec);
+
+  CODEC compression_type = CODEC::PLAIN;
   std::shared_ptr<DataType> type;
   int64_t length = 0;
   mutable std::atomic<int64_t> null_count{0};
@@ -266,6 +280,14 @@ struct ARROW_EXPORT ArraySpan {
   mutable int64_t null_count = kUnknownNullCount;
   int64_t offset = 0;
   BufferSpan buffers[3];
+  CODEC compression_type = CODEC::PLAIN;
+  mutable Codecset::FOR_int<int64_t> codec_for;
+  mutable Codecset::Leco_int<int64_t> codec_leco;
+  mutable Codecset::Delta_int<int64_t> codec_delta;
+  mutable int* start_pos = nullptr;
+  mutable int blocks = 0;
+  mutable int block_size = 0;
+  mutable bool codec_inited = false;
 
   // 16 bytes of scratch space to enable this ArraySpan to be a view onto
   // scalar values including binary scalars (where we need to create a buffer
@@ -290,6 +312,8 @@ struct ARROW_EXPORT ArraySpan {
 
   void SetMembers(const ArrayData& data);
 
+  void SetCompressionType(CODEC codec){compression_type = codec;}
+
   void SetBuffer(int index, const std::shared_ptr<Buffer>& buffer) {
     this->buffers[index].data = const_cast<uint8_t*>(buffer->data());
     this->buffers[index].size = buffer->size();
@@ -313,6 +337,249 @@ struct ARROW_EXPORT ArraySpan {
     return GetValues<T>(i, this->offset);
   }
 
+  template <typename T>
+  inline int64_t GetCompressedValuesRange(int i, int pos, int len) const {
+    if (compression_type == CODEC::DELTA){
+      int64_t sum =0;
+      T* out = new T[len];
+      Codecset::Delta_int<T> codec;
+      uint8_t* data_buffer = buffers[i].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int* start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+      codec.init(blocks, block_size);
+
+      int start_idx = pos;
+      int end_idx = pos+len-1;
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      if(start_block==end_block){
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, len);
+      }
+      else{
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, (block_size - start_idx%block_size));
+        out += (block_size - start_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          codec.decodeRange(data_buffer+ start_pos[i], out, 0, block_size);
+          out+= block_size;
+        }
+        codec.decodeRange(data_buffer+ start_pos[end_block], out, 0, end_idx%block_size);
+      }
+      for (int64_t i = 0; i < len; ++i) {
+          sum += out[i];
+      }
+      free(out);
+      return sum;
+    }
+  }
+  template <typename T>
+  inline void DecodeBlock(int blockid, T* out) const {
+      Codecset::Delta_int<T> codec;
+      uint8_t* data_buffer = buffers[1].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2)[blockid];
+      codec.init(blocks, block_size);
+      codec.decodeArray8(data_buffer+start_pos, block_size, out, 0);
+
+  }
+
+  template <typename T>
+  inline void GetCompressedValues(int i, T* out) const {
+    if (compression_type == CODEC::FOR){
+      Codecset::FOR_int<T> codec;
+      uint8_t* data_buffer = buffers[i].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int* start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+      codec.init(blocks, block_size);
+      int block_length = block_size;
+      for(int i = 0; i< blocks;i++){
+        if (i == blocks - 1)
+        {
+            block_length = length - (blocks - 1) * block_size;
+        }
+        int seg_start = start_pos[i];
+        codec.decodeArray8(data_buffer+seg_start, block_length, out + i * block_size, i);
+      }
+    }
+    else if (compression_type == CODEC::LECO){
+      Codecset::Leco_int<T> codec;
+      uint8_t* data_buffer = buffers[i].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int* start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+      codec.init(blocks, block_size);
+      int block_length = block_size;
+      for(int i = 0; i< blocks;i++){
+        if (i == blocks - 1)
+        {
+            block_length = length - (blocks - 1) * block_size;
+        }
+        int seg_start = start_pos[i];
+        codec.decodeArray8(data_buffer+seg_start, block_length, out + i * block_size, i);
+      }
+    }
+    else if (compression_type == CODEC::DELTA){
+      Codecset::Delta_int<T> codec;
+      uint8_t* data_buffer = buffers[i].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int* start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+      codec.init(blocks, block_size);
+      int block_length = block_size;
+      for(int i = 0; i< blocks;i++){
+        if (i == blocks - 1)
+        {
+            block_length = length - (blocks - 1) * block_size;
+        }
+        int seg_start = start_pos[i];
+        codec.decodeArray8(data_buffer+seg_start, block_length, out + i * block_size, i);
+      }
+    }
+  }
+
+  template <typename T>
+  inline T GetSum(int i) const {
+    if (compression_type == CODEC::FOR){
+      T returnvalue = 0;
+      Codecset::FOR_int<T> codec;
+      uint8_t* data_buffer = buffers[i].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int* start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+      codec.init(blocks, block_size);
+      int block_length = block_size;
+      for(int i = 0; i< blocks;i++){
+        if (i == blocks - 1)
+        {
+            block_length = length - (blocks - 1) * block_size;
+        }
+        int seg_start = start_pos[i];
+        returnvalue+= codec.summation(data_buffer+seg_start, block_length, i);
+      }
+      return returnvalue;
+    }
+    else if (compression_type == CODEC::LECO){
+      T returnvalue = 0;
+      Codecset::Leco_int<T> codec;
+      uint8_t* data_buffer = buffers[i].data;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+      int* start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+      codec.init(blocks, block_size);
+      int block_length = block_size;
+      for(int i = 0; i< blocks;i++){
+        if (i == blocks - 1)
+        {
+            block_length = length - (blocks - 1) * block_size;
+        }
+        int seg_start = start_pos[i];
+        returnvalue+= codec.summation(data_buffer+seg_start, block_length, i);
+      }
+      return returnvalue;
+    }
+    
+  }
+
+  void init_codec() const {
+    if(compression_type!=CODEC::PLAIN){
+    uint8_t* data_buffer = buffers[1].data;
+    memcpy(&blocks, data_buffer, sizeof(int));
+    memcpy(&block_size, data_buffer+sizeof(int), sizeof(int));
+    if(compression_type==CODEC::FOR){
+      codec_for.init(blocks, block_size);
+    }
+    else if(compression_type==CODEC::LECO){
+      codec_leco.init(blocks, block_size);
+    }
+    else if(compression_type==CODEC::DELTA){
+      codec_delta.init(blocks, block_size);
+    }
+
+    start_pos = reinterpret_cast<int*>(data_buffer+sizeof(int)*2);
+    codec_inited = true;
+    }
+  }
+  template <typename T>
+  inline T GetSumRange(int i, int start_idx, int end_idx) const {
+    if (compression_type == CODEC::FOR){
+      T returnvalue = 0;
+      uint8_t* data_buffer = buffers[i].data;
+      int block_length = block_size;
+
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      if(start_block==end_block){
+        returnvalue = codec_for.summation_range(data_buffer+ start_pos[start_block], start_idx%block_size, end_idx%block_size);
+      }
+      else{
+        returnvalue += codec_for.summation_range(data_buffer+ start_pos[start_block], start_idx%block_size, block_size - 1);
+        returnvalue += codec_for.summation_range(data_buffer+ start_pos[end_block], 0, end_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          int seg_start = start_pos[i];
+          returnvalue+= codec_for.summation(data_buffer+seg_start, block_length, i);
+        }
+      }
+      return returnvalue;
+    }
+    else if (compression_type == CODEC::LECO){
+      T returnvalue = 0;
+      uint8_t* data_buffer = buffers[i].data;
+      int block_length = block_size;
+
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      if(start_block==end_block){
+        returnvalue = codec_leco.summation_range(data_buffer+ start_pos[start_block], start_idx%block_size, end_idx%block_size);
+      }
+      else{
+        returnvalue += codec_leco.summation_range(data_buffer+ start_pos[start_block], start_idx%block_size, block_size - 1);
+        returnvalue += codec_leco.summation_range(data_buffer+ start_pos[end_block], 0, end_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          int seg_start = start_pos[i];
+          returnvalue+= codec_leco.summation(data_buffer+seg_start, block_length, i);
+        }
+      }
+      return returnvalue;
+    }
+    else if (compression_type == CODEC::DELTA){
+      T returnvalue = 0;
+      uint8_t* data_buffer = buffers[i].data;
+      int block_length = block_size;
+
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      if(start_block==end_block){
+        returnvalue = codec_delta.summation_range(data_buffer+ start_pos[start_block], start_idx%block_size, end_idx%block_size);
+      }
+      else{
+        returnvalue += codec_delta.summation_range(data_buffer+ start_pos[start_block], start_idx%block_size, block_size - 1);
+        returnvalue += codec_delta.summation_range(data_buffer+ start_pos[end_block], 0, end_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          int seg_start = start_pos[i];
+          returnvalue+= codec_delta.summation(data_buffer+seg_start, block_length, i);
+        }
+      }
+      return returnvalue;
+    }
+    
+  }
+
   // Access a buffer's data as a typed C pointer
   template <typename T>
   inline const T* GetValues(int i, int64_t absolute_offset) const {
@@ -322,6 +589,43 @@ struct ARROW_EXPORT ArraySpan {
   template <typename T>
   inline const T* GetValues(int i) const {
     return GetValues<T>(i, this->offset);
+  }
+
+  template <typename T>
+  inline const T GetSingleValue(int i, int idx) const {
+    if (compression_type==CODEC::PLAIN){
+        return GetValues<T>(i, this->offset)[idx];
+    }
+    else if (compression_type == CODEC::FOR){
+      if(!codec_inited){
+        init_codec();
+      }
+      uint8_t* data_buffer = buffers[i].data;
+      int block_idx = idx/block_size;
+      T tmpvalue = codec_for.randomdecodeArray8(data_buffer+start_pos[block_idx], idx % block_size, NULL, length);
+      return tmpvalue;
+
+    }
+    else if (compression_type == CODEC::LECO){
+      if(!codec_inited){
+        init_codec();
+      }
+      uint8_t* data_buffer = buffers[i].data;
+      int block_idx = idx/block_size;
+      T tmpvalue = codec_leco.randomdecodeArray8(data_buffer+start_pos[block_idx], idx % block_size, NULL, length);
+      return tmpvalue;
+
+    }
+    else if (compression_type == CODEC::DELTA){
+      if(!codec_inited){
+        init_codec();
+      }
+      uint8_t* data_buffer = buffers[i].data;
+      int block_idx = idx/block_size;
+      T tmpvalue = codec_delta.randomdecodeArray8(data_buffer+start_pos[block_idx], idx % block_size, NULL, length);
+      return tmpvalue;
+
+    }
   }
 
   bool IsNull(int64_t i) const {

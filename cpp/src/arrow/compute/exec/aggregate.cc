@@ -225,6 +225,7 @@ Result<Datum> GroupBy(const std::vector<Datum>& arguments, const std::vector<Dat
   }
 
   int64_t length = out_data[0]->length;
+  std::cout<<length<<std::endl;
   return ArrayData::Make(struct_(std::move(out_fields)), length,
                          {/*null_bitmap=*/nullptr}, std::move(out_data),
                          /*null_count=*/0);

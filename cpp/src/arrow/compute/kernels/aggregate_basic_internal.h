@@ -83,7 +83,7 @@ struct SumImpl : public ScalarAggregator {
       if (is_boolean_type<ArrowType>::value) {
         this->sum += GetTrueCount(data);
       } else {
-        this->sum += SumArray<CType, SumCType, SimdLevel>(data);
+          this->sum +=SumArray<CType, SumCType, SimdLevel>(data);
       }
     } else {
       const Scalar& data = *batch[0].scalar;

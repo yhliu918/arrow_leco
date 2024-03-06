@@ -295,55 +295,278 @@ void Hashing32::HashBit(bool combine_hashes, int64_t bit_offset, uint32_t num_ke
 }
 
 template <bool T_COMBINE_HASHES, typename T>
-void Hashing32::HashIntImp(uint32_t num_keys, const T* keys, uint32_t* hashes) {
+void Hashing32::HashIntImp(uint32_t num_keys, const T* keys, uint32_t* hashes, CODEC codec, const uint8_t* nullmap, int start_row, uint8_t*outbuff, int* num_remain) {
   constexpr uint64_t multiplier = 11400714785074694791ULL;
-  for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
-    uint64_t x = static_cast<uint64_t>(keys[ikey]);
-    uint32_t hash = static_cast<uint32_t>(BYTESWAP(x * multiplier));
+  if (nullmap != nullptr) {
+    if (codec == CODEC::PLAIN) {
+      int counter = 0;
+      for (uint32_t ikey = start_row; ikey < num_keys+start_row; ++ikey) {
+        if (bit_util::GetBit(nullmap, ikey)) {
+          uint64_t x = static_cast<uint64_t>(keys[ikey]);
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(x * multiplier));
 
-    if (T_COMBINE_HASHES) {
-      hashes[ikey] = CombineHashesImp(hashes[ikey], hash);
-    } else {
-      hashes[ikey] = hash;
+          if (T_COMBINE_HASHES) {
+            hashes[ikey] = CombineHashesImp(hashes[ikey], hash);
+          } else {
+            hashes[counter++] = hash;
+          }
+        }
+      }
+      *num_remain  += counter;
+    } else if (codec == CODEC::FOR) {
+      const uint8_t* data_buffer = reinterpret_cast<const uint8_t*>(keys);
+      Codecset::FOR_int<T> codec;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer + sizeof(int), sizeof(int));
+      codec.init(blocks, block_size);
+      int counter = 0;
+      for (uint32_t ikey = start_row; ikey < num_keys+start_row; ++ikey) {
+        if (bit_util::GetBit(nullmap, ikey)) {
+          int block_idx = ikey / block_size;
+          int segment_start_byte = 0;
+          memcpy(&segment_start_byte,
+                 data_buffer + sizeof(int) * 2 + sizeof(int) * block_idx, sizeof(int));
+          T tmpvalue = codec.randomdecodeArray8(data_buffer + segment_start_byte,
+                                                ikey % block_size, NULL, num_keys);
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(tmpvalue * multiplier));
+
+          hashes[counter++] = hash;
+          
+        }
+      }
+      *num_remain  += counter;
+    } else if (codec == CODEC::LECO) {
+      const uint8_t* data_buffer = reinterpret_cast<const uint8_t*>(keys);
+      Codecset::Leco_int<T> codec;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer + sizeof(int), sizeof(int));
+      codec.init(blocks, block_size);
+      int counter = 0;
+      for (uint32_t ikey = start_row; ikey < num_keys+start_row; ++ikey) {
+        if (bit_util::GetBit(nullmap, ikey)) {
+          int block_idx = ikey / block_size;
+          int segment_start_byte = 0;
+          memcpy(&segment_start_byte,
+                 data_buffer + sizeof(int) * 2 + sizeof(int) * block_idx, sizeof(int));
+          T tmpvalue = codec.randomdecodeArray8(data_buffer + segment_start_byte,
+                                                ikey % block_size, NULL, num_keys);
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(tmpvalue * multiplier));
+
+
+          hashes[counter++] = hash;
+        }
+      }
+      *num_remain  += counter;
+    } else if (codec == CODEC::DELTA) {
+      const uint8_t* data_buffer = reinterpret_cast<const uint8_t*>(keys);
+      Codecset::Delta_int<T> codec;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer + sizeof(int), sizeof(int));
+      codec.init(blocks, block_size);
+      const int* seg_start = reinterpret_cast<const int*>(data_buffer + sizeof(int) * 2);
+      int counter = 0;
+      int current_block_id = start_row/block_size;
+      // T* tmpvalue = new T[block_size];
+      T* out = reinterpret_cast<T*>(outbuff);
+      bool init = false;
+      for (uint32_t ikey = start_row; ikey < num_keys+start_row; ++ikey) {
+        if (bit_util::GetBit(nullmap, ikey)) {
+          int block_idx = ikey / block_size;
+          if(block_idx != current_block_id|| !init){
+            current_block_id = block_idx;
+            int end_index = std::min(block_size-1, int(num_keys+start_row)-1);
+            codec.decodeRange(data_buffer + seg_start[current_block_id],out, ikey%block_size, end_index%block_size-ikey%block_size+1);
+            init = true;
+          }
+
+          T tmpval = out[ikey%block_size];
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(tmpval * multiplier));
+
+
+          hashes[counter++] = hash;
+        }
+      }
+
+      // for (uint32_t ikey = start_row; ikey < num_keys+start_row; ++ikey) {
+      //   if (bit_util::GetBit(nullmap, ikey)) {
+      //     int block_idx = ikey / block_size;
+      //     int segment_start_byte = 0;
+      //     memcpy(&segment_start_byte,
+      //            data_buffer + sizeof(int) * 2 + sizeof(int) * block_idx, sizeof(int));
+      //     T tmpvalue = codec.randomdecodeArray8(data_buffer + segment_start_byte,
+      //                                           ikey % block_size, NULL, num_keys);
+      //     uint32_t hash = static_cast<uint32_t>(BYTESWAP(tmpvalue * multiplier));
+
+
+      //     hashes[counter++] = hash;
+      //   }
+      // }
+      *num_remain  += counter;
     }
+  } else {
+    if (codec == CODEC::PLAIN) {
+      for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
+        uint64_t x = static_cast<uint64_t>(keys[ikey]);
+        uint32_t hash = static_cast<uint32_t>(BYTESWAP(x * multiplier));
+
+        if (T_COMBINE_HASHES) {
+          hashes[ikey] = CombineHashesImp(hashes[ikey], hash);
+        } else {
+          hashes[ikey] = hash;
+        }
+      }
+    }
+    else if (codec == CODEC::FOR){
+      const uint8_t* data_buffer = reinterpret_cast<const uint8_t*>(keys);
+      Codecset::FOR_int<T> codec;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer + sizeof(int), sizeof(int));
+      codec.init(blocks, block_size);
+      int start_idx = start_row;
+      int end_idx = num_keys+start_row-1;
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      const int* start_pos = reinterpret_cast<const int*>(data_buffer+sizeof(int)*2);
+      T* out = reinterpret_cast<T*>(outbuff);
+      if(start_block==end_block){
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, end_idx%block_size);
+      }
+      else{
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, block_size - 1);
+        out += (block_size - start_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          int seg_start = start_pos[i];
+          codec.decodeRange(data_buffer+ start_pos[i], out, 0, block_size - 1);
+          out+= block_size;
+        }
+        codec.decodeRange(data_buffer+ start_pos[end_block], out, 0, end_idx%block_size);
+      }
+
+      for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(outbuff[ikey] * multiplier));
+          hashes[ikey] = hash;
+        
+      }
+
+    }
+    else if (codec == CODEC::LECO){
+      const uint8_t* data_buffer = reinterpret_cast<const uint8_t*>(keys);
+      Codecset::Leco_int<T> codec;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer + sizeof(int), sizeof(int));
+      codec.init(blocks, block_size);
+      int start_idx = start_row;
+      int end_idx = num_keys+start_row-1;
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      const int* start_pos = reinterpret_cast<const int*>(data_buffer+sizeof(int)*2);
+      T* out = reinterpret_cast<T*>(outbuff);
+      if(start_block==end_block){
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, end_idx%block_size);
+      }
+      else{
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, block_size - 1);
+        out += (block_size - start_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          int seg_start = start_pos[i];
+          codec.decodeRange(data_buffer+ start_pos[i], out, 0, block_size - 1);
+          out+= block_size;
+        }
+        codec.decodeRange(data_buffer+ start_pos[end_block], out, 0, end_idx%block_size);
+      }
+
+      for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(outbuff[ikey] * multiplier));
+          hashes[ikey] = hash;
+        
+      }
+
+    }
+    else if (codec == CODEC::DELTA){
+      const uint8_t* data_buffer = reinterpret_cast<const uint8_t*>(keys);
+      Codecset::Delta_int<T> codec;
+      int blocks = 0;
+      int block_size = 0;
+      memcpy(&blocks, data_buffer, sizeof(int));
+      memcpy(&block_size, data_buffer + sizeof(int), sizeof(int));
+      codec.init(blocks, block_size);
+      int start_idx = start_row;
+      int end_idx = num_keys+start_row-1;
+      int start_block = start_idx/block_size;
+      int end_block = end_idx / block_size;
+      const int* start_pos = reinterpret_cast<const int*>(data_buffer+sizeof(int)*2);
+      T* out = reinterpret_cast<T*>(outbuff);
+      if(start_block==end_block){
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, end_idx%block_size);
+      }
+      else{
+        codec.decodeRange(data_buffer+ start_pos[start_block], out, start_idx%block_size, block_size - 1);
+        out += (block_size - start_idx%block_size);
+        for(int i = start_block+1; i< end_block;i++){
+          int seg_start = start_pos[i];
+          codec.decodeRange(data_buffer+ start_pos[i], out, 0, block_size - 1);
+          out+= block_size;
+        }
+        codec.decodeRange(data_buffer+ start_pos[end_block], out, 0, end_idx%block_size);
+      }
+
+      for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
+          uint32_t hash = static_cast<uint32_t>(BYTESWAP(outbuff[ikey] * multiplier));
+          hashes[ikey] = hash;
+        
+      }
+
+    }
+
   }
+
 }
 
 void Hashing32::HashInt(bool combine_hashes, uint32_t num_keys, uint64_t length_key,
-                        const uint8_t* keys, uint32_t* hashes) {
+                        const uint8_t* keys, uint32_t* hashes, CODEC codec, const uint8_t* nullmap, int start_row, uint8_t* outbuff, int* num_remain) {
   switch (length_key) {
     case sizeof(uint8_t):
       if (combine_hashes) {
-        HashIntImp<true, uint8_t>(num_keys, keys, hashes);
+        HashIntImp<true, uint8_t>(num_keys, keys, hashes, codec, nullmap, start_row, outbuff, num_remain);
       } else {
-        HashIntImp<false, uint8_t>(num_keys, keys, hashes);
+        HashIntImp<false, uint8_t>(num_keys, keys, hashes, codec, nullmap, start_row, outbuff, num_remain);
       }
       break;
     case sizeof(uint16_t):
       if (combine_hashes) {
         HashIntImp<true, uint16_t>(num_keys, reinterpret_cast<const uint16_t*>(keys),
-                                   hashes);
+                                   hashes, codec, nullmap, start_row, outbuff, num_remain);
       } else {
         HashIntImp<false, uint16_t>(num_keys, reinterpret_cast<const uint16_t*>(keys),
-                                    hashes);
+                                    hashes, codec, nullmap, start_row, outbuff, num_remain);
       }
       break;
     case sizeof(uint32_t):
       if (combine_hashes) {
         HashIntImp<true, uint32_t>(num_keys, reinterpret_cast<const uint32_t*>(keys),
-                                   hashes);
+                                   hashes, codec, nullmap, start_row, outbuff, num_remain);
       } else {
         HashIntImp<false, uint32_t>(num_keys, reinterpret_cast<const uint32_t*>(keys),
-                                    hashes);
+                                    hashes, codec, nullmap, start_row, outbuff, num_remain);
       }
       break;
     case sizeof(uint64_t):
       if (combine_hashes) {
         HashIntImp<true, uint64_t>(num_keys, reinterpret_cast<const uint64_t*>(keys),
-                                   hashes);
+                                   hashes, codec, nullmap, start_row, outbuff, num_remain);
       } else {
         HashIntImp<false, uint64_t>(num_keys, reinterpret_cast<const uint64_t*>(keys),
-                                    hashes);
+                                    hashes, codec, nullmap, start_row, outbuff, num_remain);
       }
       break;
     default:
@@ -354,9 +577,9 @@ void Hashing32::HashInt(bool combine_hashes, uint32_t num_keys, uint64_t length_
 
 void Hashing32::HashFixed(int64_t hardware_flags, bool combine_hashes, uint32_t num_rows,
                           uint64_t length, const uint8_t* keys, uint32_t* hashes,
-                          uint32_t* hashes_temp_for_combine) {
+                          uint32_t* hashes_temp_for_combine, CODEC codec = CODEC::PLAIN, const uint8_t* nullmap = nullptr, int start_row=0, uint8_t* outbuff=nullptr, int* num_remain=0) {
   if (ARROW_POPCOUNT64(length) == 1 && length <= sizeof(uint64_t)) {
-    HashInt(combine_hashes, num_rows, length, keys, hashes);
+    HashInt(combine_hashes, num_rows, length, keys, hashes, codec, nullmap, start_row, outbuff, num_remain);
     return;
   }
 
@@ -455,6 +678,41 @@ void Hashing32::HashMultiColumn(const std::vector<KeyColumnArray>& cols,
 
     first_row += batch_size_next;
   }
+}
+
+void Hashing32::HashMultiColumnNew(const std::vector<KeyColumnArray>& cols,
+                                   LightContext* ctx, uint32_t* hashes,
+                                   CODEC codec = CODEC::PLAIN, int start_row=0, int size = 0, uint8_t* outbuff=nullptr, int* number_remain=0) {
+  uint32_t num_rows = size;
+
+  constexpr uint32_t max_batch_size = util::MiniBatch::kMiniBatchLength;
+
+  auto hash_temp_buf = util::TempVectorHolder<uint32_t>(ctx->stack, max_batch_size);
+  uint32_t* hash_temp = hash_temp_buf.mutable_data();
+
+  auto null_indices_buf = util::TempVectorHolder<uint16_t>(ctx->stack, max_batch_size);
+  uint16_t* null_indices = null_indices_buf.mutable_data();
+  int num_null_indices;
+
+  auto null_hash_temp_buf = util::TempVectorHolder<uint32_t>(ctx->stack, max_batch_size);
+  uint32_t* null_hash_temp = null_hash_temp_buf.mutable_data();
+  memset(hashes, 0, num_rows*sizeof(int));
+  int num_remain = 0;
+  for (uint32_t first_row = 0; first_row < num_rows;) {
+    uint32_t batch_size_next = std::min(num_rows - first_row, max_batch_size);
+
+    for (size_t icol = 0; icol < cols.size(); ++icol) {
+      if (cols[icol].metadata().is_fixed_length) {
+        uint32_t col_width = cols[icol].metadata().fixed_length;
+        HashFixed(ctx->hardware_flags, icol > 0, batch_size_next, col_width,
+                  cols[icol].data(1), hashes + num_remain, hash_temp, codec,
+                  cols[icol].data(0), start_row+first_row, outbuff, &num_remain);
+      }
+    }
+
+    first_row += batch_size_next;
+  }
+  *number_remain = num_remain;
 }
 
 Status Hashing32::HashBatch(const ExecBatch& key_batch, uint32_t* hashes,
@@ -741,19 +999,24 @@ void Hashing64::HashBit(bool combine_hashes, int64_t bit_offset, uint32_t num_ke
   }
 }
 
+
 template <bool T_COMBINE_HASHES, typename T>
 void Hashing64::HashIntImp(uint32_t num_keys, const T* keys, uint64_t* hashes) {
   constexpr uint64_t multiplier = 11400714785074694791ULL;
-  for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
-    uint64_t x = static_cast<uint64_t>(keys[ikey]);
-    uint64_t hash = static_cast<uint64_t>(BYTESWAP(x * multiplier));
+      for (uint32_t ikey = 0; ikey < num_keys; ++ikey) {
+        uint64_t x = static_cast<uint64_t>(keys[ikey]);
+        uint64_t hash = static_cast<uint64_t>(BYTESWAP(x * multiplier));
 
-    if (T_COMBINE_HASHES) {
-      hashes[ikey] = CombineHashesImp(hashes[ikey], hash);
-    } else {
-      hashes[ikey] = hash;
-    }
-  }
+        if (T_COMBINE_HASHES) {
+          hashes[ikey] = CombineHashesImp(hashes[ikey], hash);
+        } else {
+          hashes[ikey] = hash;
+        }
+      }
+
+
+  
+
 }
 
 void Hashing64::HashInt(bool combine_hashes, uint32_t num_keys, uint64_t length_key,

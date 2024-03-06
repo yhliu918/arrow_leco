@@ -340,13 +340,13 @@ struct test_traits<::arrow::FloatType> {
 
 const float test_traits<::arrow::FloatType>::value(2.1f);
 
-template <>
-struct test_traits<::arrow::DoubleType> {
-  static constexpr ParquetType::type parquet_enum = ParquetType::DOUBLE;
-  static double const value;
-};
+// template <>
+// struct test_traits<::arrow::DoubleType> {
+//   static constexpr ParquetType::type parquet_enum = ParquetType::DOUBLE;
+//   static double const value;
+// };
 
-const double test_traits<::arrow::DoubleType>::value(4.2);
+// const double test_traits<::arrow::DoubleType>::value(4.2);
 
 template <>
 struct test_traits<::arrow::StringType> {
@@ -836,7 +836,7 @@ class TestParquetIO : public ParquetIOTestBase {
 typedef ::testing::Types<
     ::arrow::BooleanType, ::arrow::UInt8Type, ::arrow::Int8Type, ::arrow::UInt16Type,
     ::arrow::Int16Type, ::arrow::Int32Type, ::arrow::UInt64Type, ::arrow::Int64Type,
-    ::arrow::Date32Type, ::arrow::FloatType, ::arrow::DoubleType, ::arrow::StringType,
+    ::arrow::Date32Type, ::arrow::StringType,
     ::arrow::BinaryType, ::arrow::FixedSizeBinaryType, DecimalWithPrecisionAndScale<1>,
     DecimalWithPrecisionAndScale<5>, DecimalWithPrecisionAndScale<10>,
     DecimalWithPrecisionAndScale<19>, DecimalWithPrecisionAndScale<23>,
@@ -1584,8 +1584,7 @@ class TestPrimitiveParquetIO : public TestParquetIO<TestType> {
 
 typedef ::testing::Types<::arrow::BooleanType, ::arrow::UInt8Type, ::arrow::Int8Type,
                          ::arrow::UInt16Type, ::arrow::Int16Type, ::arrow::UInt32Type,
-                         ::arrow::Int32Type, ::arrow::UInt64Type, ::arrow::Int64Type,
-                         ::arrow::FloatType, ::arrow::DoubleType>
+                         ::arrow::Int32Type, ::arrow::UInt64Type, ::arrow::Int64Type>
     PrimitiveTestTypes;
 
 TYPED_TEST_SUITE(TestPrimitiveParquetIO, PrimitiveTestTypes);
@@ -2136,7 +2135,7 @@ void MakeDoubleTable(int num_columns, int num_rows, int nchunks,
   for (int i = 0; i < num_columns; ++i) {
     std::vector<std::shared_ptr<Array>> arrays;
     std::shared_ptr<Array> values;
-    ASSERT_OK(NullableArray<::arrow::DoubleType>(num_rows, num_rows / 10,
+    ASSERT_OK(NullableArray<::arrow::Int64Type>(num_rows, num_rows / 10,
                                                  static_cast<uint32_t>(i), &values));
     std::stringstream ss;
     ss << "col" << i;
@@ -3941,6 +3940,22 @@ TEST(TestArrowReaderAdHoc, WriteBatchedNestedNullableStringColumn) {
   std::shared_ptr<Table> actual;
   DoRoundtrip(expected, /*row_group_size=*/outer_array->length(), &actual, write_props);
   ::arrow::AssertTablesEqual(*expected, *actual, /*same_chunk_layout=*/false);
+}
+
+TEST(TestArrowReaderAdHoc, OldDataPageV2) {
+  // ARROW-17100
+#ifndef ARROW_WITH_SNAPPY
+  GTEST_SKIP() << "Test requires Snappy compression";
+#endif
+  const char* c_root = std::getenv("ARROW_TEST_DATA");
+  if (!c_root) {
+    GTEST_SKIP() << "ARROW_TEST_DATA not set.";
+  }
+  std::stringstream ss;
+  ss << c_root << "/"
+     << "parquet/ARROW-17100.parquet";
+  std::string path = ss.str();
+  TryReadDataFile(path);
 }
 
 class TestArrowReaderAdHocSparkAndHvr

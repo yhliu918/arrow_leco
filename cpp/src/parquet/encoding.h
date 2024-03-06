@@ -23,11 +23,11 @@
 #include <vector>
 
 #include "arrow/util/spaced.h"
-
+#include "arrow/array/data.h"
 #include "parquet/exception.h"
 #include "parquet/platform.h"
 #include "parquet/types.h"
-
+using arrow::ArraySpan;
 namespace arrow {
 
 class Array;
@@ -279,13 +279,16 @@ class TypedDecoder : virtual public Decoder {
   /// \return The number of values decoded. Should be identical to max_values except
   /// at the end of the current data page.
   virtual int Decode(T* buffer, int max_values) = 0;
+  virtual std::shared_ptr<ArraySpan> ArrowDecode(const uint8_t* values, int max_values) {
+    ParquetException::NYI("DecodeBitpos not supported for TypedDecoder base class");
+  }
 
   virtual int DecodeBitpos(T* buffer, int max_values, int64_t* value_true_read,
                            std::vector<uint32_t>& bitpos, int64_t row_index,
                            int64_t bitpos_index) {
     ParquetException::NYI("DecodeBitpos not supported for TypedDecoder base class");
   }
-  virtual int DecodeFilter(T* buffer, int max_values, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
+  virtual int DecodeFilter(T* buffer, int max_values, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
     ParquetException::NYI("DecodeFilter not supported for TypedDecoder base class");
   }
 

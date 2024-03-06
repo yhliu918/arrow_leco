@@ -57,6 +57,11 @@ using arrow::MemoryPool;
 using arrow::internal::AddWithOverflow;
 using arrow::internal::checked_cast;
 using arrow::internal::MultiplyWithOverflow;
+using arrow::Array;
+using arrow::PrimitiveArray;
+using arrow::ArraySpan;
+using arrow::ArrayData;
+using arrow::CODEC;
 
 namespace bit_util = arrow::bit_util;
 
@@ -225,7 +230,7 @@ class SerializedPageReader : public PageReader {
  public:
   SerializedPageReader(std::shared_ptr<ArrowInputStream> stream, int64_t total_num_rows,
                        Compression::type codec, const ReaderProperties& properties,
-                       const CryptoContext* crypto_ctx)
+                       const CryptoContext* crypto_ctx, bool always_compressed)
       : properties_(properties),
         stream_(std::move(stream)),
         decompression_buffer_(AllocateBuffer(properties_.memory_pool(), 0)),
@@ -239,6 +244,7 @@ class SerializedPageReader : public PageReader {
     }
     max_page_header_size_ = kDefaultMaxPageHeaderSize;
     decompressor_ = GetCodec(codec);
+    always_compressed_ = always_compressed;
   }
 
   // Implement the PageReader interface
@@ -265,6 +271,8 @@ class SerializedPageReader : public PageReader {
   // Compression codec to use.
   std::unique_ptr<::arrow::util::Codec> decompressor_;
   std::shared_ptr<ResizableBuffer> decompression_buffer_;
+
+  bool always_compressed_;
 
   // The fields below are used for calculation of AAD (additional authenticated data)
   // suffix which is part of the Parquet Modular Encryption.
@@ -450,7 +458,10 @@ std::shared_ptr<Page> SerializedPageReader::NextPage() {
           header.repetition_levels_byte_length < 0) {
         throw ParquetException("Invalid page header (negative levels byte length)");
       }
-      bool is_compressed = header.__isset.is_compressed ? header.is_compressed : false;
+      // Arrow prior to 3.0.0 set is_compressed to false but still compressed.
+      bool is_compressed =
+          (header.__isset.is_compressed ? header.is_compressed : false) ||
+          always_compressed_;
       EncodedStatistics page_statistics = ExtractStatsFromHeader(header);
       seen_num_rows_ += header.num_values;
 
@@ -522,18 +533,21 @@ std::unique_ptr<PageReader> PageReader::Open(std::shared_ptr<ArrowInputStream> s
                                              int64_t total_num_rows,
                                              Compression::type codec,
                                              const ReaderProperties& properties,
+                                             bool always_compressed,
                                              const CryptoContext* ctx) {
   return std::unique_ptr<PageReader>(new SerializedPageReader(
-      std::move(stream), total_num_rows, codec, properties, ctx));
+      std::move(stream), total_num_rows, codec, properties, ctx, always_compressed));
 }
 
 std::unique_ptr<PageReader> PageReader::Open(std::shared_ptr<ArrowInputStream> stream,
                                              int64_t total_num_rows,
                                              Compression::type codec,
+                                             bool always_compressed,
                                              ::arrow::MemoryPool* pool,
                                              const CryptoContext* ctx) {
-  return std::unique_ptr<PageReader>(new SerializedPageReader(
-      std::move(stream), total_num_rows, codec, ReaderProperties(pool), ctx));
+  return std::unique_ptr<PageReader>(
+      new SerializedPageReader(std::move(stream), total_num_rows, codec,
+                               ReaderProperties(pool), ctx, always_compressed));
 }
 
 namespace {
@@ -573,7 +587,10 @@ class ColumnReaderImplBase {
     int64_t num_decoded = current_decoder_->Decode(out, static_cast<int>(batch_size));
     return num_decoded;
   }
-
+  std::shared_ptr<ArraySpan> ReadValuesArrow(int64_t batch_size, const uint8_t* values) {
+    std::shared_ptr<ArraySpan> num_decoded = current_decoder_->ArrowDecode( values, static_cast<int>(batch_size));
+    return num_decoded;
+  }
   int64_t ReadValuesBitPos(int64_t batch_size, T* out, int64_t* values_true_read,
                            std::vector<uint32_t>& bitpos, int64_t row_index, int64_t bitpos_index) {
     int64_t num_decoded = current_decoder_->DecodeBitpos(
@@ -581,7 +598,7 @@ class ColumnReaderImplBase {
     return num_decoded;
   }
 
-  int64_t ReadValuesFilter(int64_t batch_size, T* out, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
+  int64_t ReadValuesFilter(int64_t batch_size, T* out, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
     int64_t num_decoded = current_decoder_->DecodeFilter(out, static_cast<int>(batch_size), filter_val, bitpos, is_gt, filter_count, filter2, base_val);
     return num_decoded;
   }
@@ -616,6 +633,56 @@ class ColumnReaderImplBase {
       }
     }
     return true;
+  }
+
+  std::shared_ptr<ArraySpan> ReadPageInternal() {
+    const auto page = std::static_pointer_cast<DataPageV2>(current_page_);
+    int64_t levels_byte_size = InitializeLevelDecodersV2(*page);
+    num_decoded_values_ = num_buffered_values_;
+    std::shared_ptr<Buffer> buf = SliceBuffer(current_page_->buffer(), levels_byte_size);
+    std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, buf};
+    std::shared_ptr<ArrayData> data;
+    switch (page->encoding())
+    {
+    case Encoding::PLAIN:
+      if (sizeof(T) == 4){
+        data = ArrayData::Make(::arrow::int32(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+      }
+      else if(sizeof(T) == 8){
+        data = ArrayData::Make(::arrow::int64(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+      }
+      break;
+    case Encoding::FOR:
+      if (sizeof(T) == 4){
+        data = ArrayData::Make(::arrow::int32(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::FOR);
+      }
+      else if(sizeof(T) == 8){
+        data = ArrayData::Make(::arrow::int64(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::FOR);
+      }
+      break;
+    case Encoding::LECO:
+      if (sizeof(T) == 4){
+        data = ArrayData::Make(::arrow::int32(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::LECO);
+      }
+      else if(sizeof(T) == 8){
+        data = ArrayData::Make(::arrow::int64(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::LECO);
+      }
+      break;
+    case Encoding::DELTA:
+      if (sizeof(T) == 4){
+        data = ArrayData::Make(::arrow::int32(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::DELTA);
+      }
+      else if(sizeof(T) == 8){
+        data = ArrayData::Make(::arrow::int64(), num_buffered_values_, std::move(buffers), /*null_count=*/0, 0, CODEC::DELTA);
+      }
+      break;
+    
+    default:
+      break;
+    }
+    array_data_ = data;
+    ArraySpan data_span(*data);    
+    return std::make_shared<ArraySpan>(data_span);  
   }
 
   // Read multiple repetition levels into preallocated memory
@@ -845,6 +912,12 @@ class ColumnReaderImplBase {
           decoders_[static_cast<int>(encoding)] = std::move(decoder);
           break;
         }
+        case Encoding::DELTA: {
+          auto decoder = MakeTypedDecoder<DType>(Encoding::DELTA, descr_);
+          current_decoder_ = decoder.get();
+          decoders_[static_cast<int>(encoding)] = std::move(decoder);
+          break;
+        }
         default:
           throw ParquetException("Unknown encoding type.");
       }
@@ -860,6 +933,7 @@ class ColumnReaderImplBase {
 
   std::unique_ptr<PageReader> pager_;
   std::shared_ptr<Page> current_page_;
+  std::shared_ptr<ArrayData> array_data_;
 
   // Not set if full schema for this field has no optional or repeated elements
   LevelDecoder definition_level_decoder_;
@@ -917,14 +991,18 @@ class TypedColumnReaderImpl : public TypedColumnReader<DType>,
 
   bool HasNext() override { return this->HasNextInternal(); }
 
+  std::shared_ptr<ArraySpan> ReadPage(){return this->ReadPageInternal();}
+
   int64_t ReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                     T* values, int64_t* values_read) override;
+  std::shared_ptr<ArraySpan> ReadBatchArrow(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+                    const uint8_t* values, int64_t* values_read) override;
   int64_t ReadBatchBitpos(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, int64_t* values_read, int64_t* values_true_read,
                           std::vector<uint32_t>& bitpos, int64_t row_index,
                           int64_t bitpos_index) override;
   int64_t FilterReadBatch(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
-                    T* values, int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) override;
+                    T* values, int64_t* values_read, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) override;
 
   int64_t ReadBatchSpaced(int64_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                           T* values, uint8_t* valid_bits, int64_t valid_bits_offset,
@@ -1077,6 +1155,36 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatch(int64_t batch_size, int16_t* def
 }
 
 template <typename DType>
+std::shared_ptr<ArraySpan> TypedColumnReaderImpl<DType>::ReadBatchArrow(int64_t batch_size, int16_t* def_levels,
+                                                int16_t* rep_levels, const uint8_t* values,
+                                                int64_t* values_read) {
+  // HasNext invokes ReadNewPage
+  if (!HasNext()) {
+    *values_read = 0;
+    return 0;
+  }
+
+  // TODO(wesm): keep reading data pages until batch_size is reached, or the
+  // row group is finished
+  int64_t num_def_levels = 0;
+  int64_t values_to_read = 0;
+  ReadLevels(batch_size, def_levels, rep_levels, &num_def_levels, &values_to_read);
+
+  std::shared_ptr<ArraySpan> result = this->ReadValuesArrow(values_to_read, values);
+  int64_t total_values = std::max(num_def_levels, *values_read);
+  int64_t expected_values =
+      std::min(batch_size, this->num_buffered_values_ - this->num_decoded_values_);
+  if (total_values == 0 && expected_values > 0) {
+    std::stringstream ss;
+    ss << "Read 0 values, expected " << expected_values;
+    ParquetException::EofException(ss.str());
+  }
+  this->ConsumeBufferedValues(total_values);
+
+  return result;
+}
+
+template <typename DType>
 int64_t TypedColumnReaderImpl<DType>::ReadBatchBitpos(
     int64_t batch_size, int16_t* def_levels, int16_t* rep_levels, T* values,
     int64_t* values_read, int64_t* values_true_read, std::vector<uint32_t>& bitpos,
@@ -1110,7 +1218,7 @@ int64_t TypedColumnReaderImpl<DType>::ReadBatchBitpos(
 template <typename DType>
 int64_t TypedColumnReaderImpl<DType>::FilterReadBatch(int64_t batch_size, int16_t* def_levels,
                                                 int16_t* rep_levels, T* values,
-                                                int64_t* values_read, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
+                                                int64_t* values_read, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
   // HasNext invokes ReadNewPage
   if (!HasNext()) {
     *values_read = 0;

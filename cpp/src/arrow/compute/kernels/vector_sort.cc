@@ -169,7 +169,14 @@ class ChunkedArraySorter : public TypeVisitor {
         physical_chunks_(GetPhysicalChunks(chunked_array_, physical_type_)),
         order_(order),
         null_placement_(null_placement),
-        ctx_(ctx) {}
+        ctx_(ctx) {
+          compression_type_ = chunked_array_.chunk(0)->data()->compression_type;
+          if(compression_type_!=CODEC::PLAIN){
+              ArraySpan tmpspan(*(chunked_array_.chunk(0)->data()));
+              array_span.push_back(std::move(std::make_shared<ArraySpan>(tmpspan)));
+              
+          }
+        }
 
   Status Sort() {
     ARROW_ASSIGN_OR_RAISE(array_sorter_, GetArraySorter(*physical_type_));
@@ -177,7 +184,7 @@ class ChunkedArraySorter : public TypeVisitor {
   }
 
 #define VISIT(TYPE) \
-  Status Visit(const TYPE& type) override { return SortInternal<TYPE>(); }
+  Status Visit(const TYPE& type) override { return SortInternal<TYPE>();}
 
   VISIT_SORTABLE_PHYSICAL_TYPES(VISIT)
 
@@ -266,6 +273,57 @@ class ChunkedArraySorter : public TypeVisitor {
     return Status::OK();
   }
 
+    // Function to merge two sorted vectors into one sorted vector
+    template <typename Type>
+    std::shared_ptr<Array> merge(int left, int right) {
+        int left_size = array_span[left]->length;
+        int right_size = array_span[right]->length;
+        std::vector<Type> result;
+        int i = 0, j = 0;
+        Type left_val = 0;
+        Type right_val = 0;
+        while (i < left_size && j < right_size) {
+          left_val = array_span[left]->GetSingleValue<Type>(1, i);
+          right_val = array_span[right]->GetSingleValue<Type>(1, j);
+            if (left_val <= right_val) {
+                result.push_back(left_val);
+                i++;
+            } else {
+                result.push_back(right_val);
+                j++;
+            }
+        }
+
+        // Append any remaining elements from both vectors
+        while (i < left_size) {
+            left_val =  array_span[left]->GetSingleValue<Type>(1, i);
+            result.push_back(left_val);
+            i++;
+        }
+        while (j < right_size) {
+            right_val =  array_span[right]->GetSingleValue<Type>(1, i);
+            result.push_back(right_val);
+            j++;
+        }
+        
+        std::shared_ptr<Buffer> array_tmp = std::make_shared<Buffer>(reinterpret_cast<uint8_t*>(result.data()),result.size()*sizeof(Type));
+        std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, array_tmp};
+        std::shared_ptr<ArrayData> data;
+        if (sizeof(Type) == 4){
+          data = ArrayData::Make(::arrow::int32(), result.size(),
+                                                      std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+        }
+        else{
+          data = ArrayData::Make(::arrow::int64(), result.size(),
+                                                      std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+        }
+        
+        ArraySpan data_span(*data);      
+        return data_span.ToArray();
+    }
+
+
+
   template <typename ArrayType>
   void MergeNonNulls(uint64_t* range_begin, uint64_t* range_middle, uint64_t* range_end,
                      const std::vector<const Array*>& arrays, uint64_t* temp_indices) {
@@ -273,12 +331,22 @@ class ChunkedArraySorter : public TypeVisitor {
     const ChunkedArrayResolver right_resolver(arrays);
 
     if (order_ == SortOrder::Ascending) {
-      std::merge(range_begin, range_middle, range_middle, range_end, temp_indices,
-                 [&](uint64_t left, uint64_t right) {
-                   const auto chunk_left = left_resolver.Resolve<ArrayType>(left);
-                   const auto chunk_right = right_resolver.Resolve<ArrayType>(right);
-                   return chunk_left.Value() < chunk_right.Value();
-                 });
+      if(arrays[0]->data()->compression_type==CODEC::PLAIN){
+        std::merge(range_begin, range_middle, range_middle, range_end, temp_indices,
+                  [&](uint64_t left, uint64_t right) {
+                    const auto chunk_left = left_resolver.Resolve<ArrayType>(left);
+                    const auto chunk_right = right_resolver.Resolve<ArrayType>(right);
+                    return chunk_left.Value() < chunk_right.Value();
+                  });
+      }
+      else{
+        std::merge(range_begin, range_middle, range_middle, range_end, temp_indices,
+                  [&](uint64_t left, uint64_t right) {
+                    const auto left_val = left_resolver.ResolveCompress<int64_t>(left);
+                    const auto right_val = right_resolver.ResolveCompress<int64_t>(right);
+                    return left_val < right_val;
+                  });
+      }
     } else {
       std::merge(range_begin, range_middle, range_middle, range_end, temp_indices,
                  [&](uint64_t left, uint64_t right) {
@@ -303,6 +371,8 @@ class ChunkedArraySorter : public TypeVisitor {
   const NullPlacement null_placement_;
   ArraySortFunc array_sorter_;
   ExecContext* ctx_;
+  std::vector<std::shared_ptr<ArraySpan>> array_span;
+  CODEC compression_type_;
 };
 
 // ----------------------------------------------------------------------

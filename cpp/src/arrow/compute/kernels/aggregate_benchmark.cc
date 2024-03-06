@@ -327,7 +327,8 @@ static void BenchmarkGroupBy(benchmark::State& state,
                           "agg_" + std::to_string(idx++), b_agg.function});
   }
   for (auto _ : state) {
-    ABORT_NOT_OK(GroupBy(arguments, keys, aggregates).status());
+    auto result = GroupBy(arguments, keys, aggregates);
+    std::cout<< result->ToString()<<std::endl;
   }
 }
 
@@ -343,85 +344,85 @@ static void BenchmarkGroupBy(benchmark::State& state,
 
 // Grouped Sum
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedByTinyStringSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedByTinyStringSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto key = rng.StringWithRepeats(args.size,
-                                   /*unique=*/16,
-                                   /*min_length=*/3,
-                                   /*max_length=*/32);
+//   auto key = rng.StringWithRepeats(args.size,
+//                                    /*unique=*/16,
+//                                    /*min_length=*/3,
+//                                    /*max_length=*/32);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
+// });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedBySmallStringSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedBySmallStringSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto key = rng.StringWithRepeats(args.size,
-                                   /*unique=*/256,
-                                   /*min_length=*/3,
-                                   /*max_length=*/32);
+//   auto key = rng.StringWithRepeats(args.size,
+//                                    /*unique=*/256,
+//                                    /*min_length=*/3,
+//                                    /*max_length=*/32);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
+// });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedByMediumStringSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedByMediumStringSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto key = rng.StringWithRepeats(args.size,
-                                   /*unique=*/4096,
-                                   /*min_length=*/3,
-                                   /*max_length=*/32);
+//   auto key = rng.StringWithRepeats(args.size,
+//                                    /*unique=*/4096,
+//                                    /*min_length=*/3,
+//                                    /*max_length=*/32);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
+// });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedByTinyIntegerSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedByTinyIntegerSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto key = rng.Int64(args.size,
-                       /*min=*/0,
-                       /*max=*/15);
+//   auto key = rng.Int64(args.size,
+//                        /*min=*/0,
+//                        /*max=*/15);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
+// });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedBySmallIntegerSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedBySmallIntegerSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto key = rng.Int64(args.size,
-                       /*min=*/0,
-                       /*max=*/255);
+//   auto key = rng.Int64(args.size,
+//                        /*min=*/0,
+//                        /*max=*/255);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
+// });
 
 GROUP_BY_BENCHMARK(SumDoublesGroupedByMediumIntegerSet, [&] {
   auto summand = rng.Float64(args.size,
                              /*min=*/0.0,
                              /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+                             0,
+                             0);
 
   auto key = rng.Int64(args.size,
                        /*min=*/0,
@@ -430,92 +431,92 @@ GROUP_BY_BENCHMARK(SumDoublesGroupedByMediumIntegerSet, [&] {
   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {key});
 });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedByTinyIntStringPairSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedByTinyIntStringPairSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto int_key = rng.Int64(args.size,
-                           /*min=*/0,
-                           /*max=*/4);
-  auto str_key = rng.StringWithRepeats(args.size,
-                                       /*unique=*/4,
-                                       /*min_length=*/3,
-                                       /*max_length=*/32);
+//   auto int_key = rng.Int64(args.size,
+//                            /*min=*/0,
+//                            /*max=*/4);
+//   auto str_key = rng.StringWithRepeats(args.size,
+//                                        /*unique=*/4,
+//                                        /*min_length=*/3,
+//                                        /*max_length=*/32);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {int_key, str_key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {int_key, str_key});
+// });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedBySmallIntStringPairSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedBySmallIntStringPairSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto int_key = rng.Int64(args.size,
-                           /*min=*/0,
-                           /*max=*/15);
-  auto str_key = rng.StringWithRepeats(args.size,
-                                       /*unique=*/16,
-                                       /*min_length=*/3,
-                                       /*max_length=*/32);
+//   auto int_key = rng.Int64(args.size,
+//                            /*min=*/0,
+//                            /*max=*/15);
+//   auto str_key = rng.StringWithRepeats(args.size,
+//                                        /*unique=*/16,
+//                                        /*min_length=*/3,
+//                                        /*max_length=*/32);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {int_key, str_key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {int_key, str_key});
+// });
 
-GROUP_BY_BENCHMARK(SumDoublesGroupedByMediumIntStringPairSet, [&] {
-  auto summand = rng.Float64(args.size,
-                             /*min=*/0.0,
-                             /*max=*/1.0e14,
-                             /*null_probability=*/args.null_proportion,
-                             /*nan_probability=*/args.null_proportion / 10);
+// GROUP_BY_BENCHMARK(SumDoublesGroupedByMediumIntStringPairSet, [&] {
+//   auto summand = rng.Float64(args.size,
+//                              /*min=*/0.0,
+//                              /*max=*/1.0e14,
+//                              /*null_probability=*/args.null_proportion,
+//                              /*nan_probability=*/args.null_proportion / 10);
 
-  auto int_key = rng.Int64(args.size,
-                           /*min=*/0,
-                           /*max=*/63);
-  auto str_key = rng.StringWithRepeats(args.size,
-                                       /*unique=*/64,
-                                       /*min_length=*/3,
-                                       /*max_length=*/32);
+//   auto int_key = rng.Int64(args.size,
+//                            /*min=*/0,
+//                            /*max=*/63);
+//   auto str_key = rng.StringWithRepeats(args.size,
+//                                        /*unique=*/64,
+//                                        /*min_length=*/3,
+//                                        /*max_length=*/32);
 
-  BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {int_key, str_key});
-});
+//   BenchmarkGroupBy(state, {{"hash_sum", NULLPTR}}, {summand}, {int_key, str_key});
+// });
 
-// Grouped MinMax
+// // Grouped MinMax
 
-GROUP_BY_BENCHMARK(MinMaxDoublesGroupedByMediumInt, [&] {
-  auto input = rng.Float64(args.size,
-                           /*min=*/0.0,
-                           /*max=*/1.0e14,
-                           /*null_probability=*/args.null_proportion,
-                           /*nan_probability=*/args.null_proportion / 10);
-  auto int_key = rng.Int64(args.size, /*min=*/0, /*max=*/63);
+// GROUP_BY_BENCHMARK(MinMaxDoublesGroupedByMediumInt, [&] {
+//   auto input = rng.Float64(args.size,
+//                            /*min=*/0.0,
+//                            /*max=*/1.0e14,
+//                            /*null_probability=*/args.null_proportion,
+//                            /*nan_probability=*/args.null_proportion / 10);
+//   auto int_key = rng.Int64(args.size, /*min=*/0, /*max=*/63);
 
-  BenchmarkGroupBy(state, {{"hash_min_max", NULLPTR}}, {input}, {int_key});
-});
+//   BenchmarkGroupBy(state, {{"hash_min_max", NULLPTR}}, {input}, {int_key});
+// });
 
-GROUP_BY_BENCHMARK(MinMaxShortStringsGroupedByMediumInt, [&] {
-  auto input = rng.String(args.size,
-                          /*min_length=*/0,
-                          /*max_length=*/64,
-                          /*null_probability=*/args.null_proportion);
-  auto int_key = rng.Int64(args.size, /*min=*/0, /*max=*/63);
+// GROUP_BY_BENCHMARK(MinMaxShortStringsGroupedByMediumInt, [&] {
+//   auto input = rng.String(args.size,
+//                           /*min_length=*/0,
+//                           /*max_length=*/64,
+//                           /*null_probability=*/args.null_proportion);
+//   auto int_key = rng.Int64(args.size, /*min=*/0, /*max=*/63);
 
-  BenchmarkGroupBy(state, {{"hash_min_max", NULLPTR}}, {input}, {int_key});
-});
+//   BenchmarkGroupBy(state, {{"hash_min_max", NULLPTR}}, {input}, {int_key});
+// });
 
-GROUP_BY_BENCHMARK(MinMaxLongStringsGroupedByMediumInt, [&] {
-  auto input = rng.String(args.size,
-                          /*min_length=*/0,
-                          /*max_length=*/512,
-                          /*null_probability=*/args.null_proportion);
-  auto int_key = rng.Int64(args.size, /*min=*/0, /*max=*/63);
+// GROUP_BY_BENCHMARK(MinMaxLongStringsGroupedByMediumInt, [&] {
+//   auto input = rng.String(args.size,
+//                           /*min_length=*/0,
+//                           /*max_length=*/512,
+//                           /*null_probability=*/args.null_proportion);
+//   auto int_key = rng.Int64(args.size, /*min=*/0, /*max=*/63);
 
-  BenchmarkGroupBy(state, {{"hash_min_max", NULLPTR}}, {input}, {int_key});
-});
+//   BenchmarkGroupBy(state, {{"hash_min_max", NULLPTR}}, {input}, {int_key});
+// });
 
 //
 // Sum
@@ -543,11 +544,11 @@ static void SumKernelArgs(benchmark::internal::Benchmark* bench) {
   static void FuncName(benchmark::State& state) { SumKernel<Type>(state); } \
   BENCHMARK(FuncName)->Apply(SumKernelArgs)
 
-SUM_KERNEL_BENCHMARK(SumKernelFloat, FloatType);
-SUM_KERNEL_BENCHMARK(SumKernelDouble, DoubleType);
-SUM_KERNEL_BENCHMARK(SumKernelInt8, Int8Type);
-SUM_KERNEL_BENCHMARK(SumKernelInt16, Int16Type);
-SUM_KERNEL_BENCHMARK(SumKernelInt32, Int32Type);
+// SUM_KERNEL_BENCHMARK(SumKernelFloat, FloatType);
+// SUM_KERNEL_BENCHMARK(SumKernelDouble, DoubleType);
+// SUM_KERNEL_BENCHMARK(SumKernelInt8, Int8Type);
+// SUM_KERNEL_BENCHMARK(SumKernelInt16, Int16Type);
+// SUM_KERNEL_BENCHMARK(SumKernelInt32, Int32Type);
 SUM_KERNEL_BENCHMARK(SumKernelInt64, Int64Type);
 
 //
@@ -598,14 +599,14 @@ static void ModeKernelArgs(benchmark::internal::Benchmark* bench) {
   BenchmarkSetArgsWithSizes(bench, {1 * 1024 * 1024});  // 1M
 }
 
-BENCHMARK_TEMPLATE(ModeKernelNarrow, BooleanType)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelNarrow, Int8Type)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelNarrow, Int32Type)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelNarrow, Int64Type)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelWide, Int32Type)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelWide, Int64Type)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelWide, FloatType)->Apply(ModeKernelArgs);
-BENCHMARK_TEMPLATE(ModeKernelWide, DoubleType)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelNarrow, BooleanType)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelNarrow, Int8Type)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelNarrow, Int32Type)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelNarrow, Int64Type)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelWide, Int32Type)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelWide, Int64Type)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelWide, FloatType)->Apply(ModeKernelArgs);
+// BENCHMARK_TEMPLATE(ModeKernelWide, DoubleType)->Apply(ModeKernelArgs);
 
 //
 // MinMax
@@ -633,12 +634,12 @@ static void MinMaxKernelBenchArgs(benchmark::internal::Benchmark* bench) {
   static void FuncName(benchmark::State& state) { MinMaxKernelBench<Type>(state); } \
   BENCHMARK(FuncName)->Apply(MinMaxKernelBenchArgs)
 
-MINMAX_KERNEL_BENCHMARK(MinMaxKernelFloat, FloatType);
-MINMAX_KERNEL_BENCHMARK(MinMaxKernelDouble, DoubleType);
-MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt8, Int8Type);
-MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt16, Int16Type);
-MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt32, Int32Type);
-MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt64, Int64Type);
+// MINMAX_KERNEL_BENCHMARK(MinMaxKernelFloat, FloatType);
+// MINMAX_KERNEL_BENCHMARK(MinMaxKernelDouble, DoubleType);
+// MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt8, Int8Type);
+// MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt16, Int16Type);
+// MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt32, Int32Type);
+// MINMAX_KERNEL_BENCHMARK(MinMaxKernelInt64, Int64Type);
 
 //
 // Count
@@ -683,10 +684,10 @@ static void VarianceKernelBenchArgs(benchmark::internal::Benchmark* bench) {
   static void FuncName(benchmark::State& state) { VarianceKernelBench<Type>(state); } \
   BENCHMARK(FuncName)->Apply(VarianceKernelBenchArgs)
 
-VARIANCE_KERNEL_BENCHMARK(VarianceKernelInt32, Int32Type);
-VARIANCE_KERNEL_BENCHMARK(VarianceKernelInt64, Int64Type);
-VARIANCE_KERNEL_BENCHMARK(VarianceKernelFloat, FloatType);
-VARIANCE_KERNEL_BENCHMARK(VarianceKernelDouble, DoubleType);
+// VARIANCE_KERNEL_BENCHMARK(VarianceKernelInt32, Int32Type);
+// VARIANCE_KERNEL_BENCHMARK(VarianceKernelInt64, Int64Type);
+// VARIANCE_KERNEL_BENCHMARK(VarianceKernelFloat, FloatType);
+// VARIANCE_KERNEL_BENCHMARK(VarianceKernelDouble, DoubleType);
 
 //
 // Quantile
@@ -759,19 +760,19 @@ static void QuantileKernelArgs(benchmark::internal::Benchmark* bench) {
   BenchmarkSetArgsWithSizes(bench, {1 * 1024 * 1024});
 }
 
-BENCHMARK_TEMPLATE(QuantileKernelMedianNarrow, Int32Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelMedianWide, Int32Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelMedianNarrow, Int64Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelMedianWide, Int64Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelMedianWide, DoubleType)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelMedianNarrow, Int32Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelMedianWide, Int32Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelMedianNarrow, Int64Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelMedianWide, Int64Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelMedianWide, DoubleType)->Apply(QuantileKernelArgs);
 
-BENCHMARK_TEMPLATE(QuantileKernelDecilesNarrow, Int32Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelDecilesWide, Int32Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelDecilesWide, DoubleType)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelDecilesNarrow, Int32Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelDecilesWide, Int32Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelDecilesWide, DoubleType)->Apply(QuantileKernelArgs);
 
-BENCHMARK_TEMPLATE(QuantileKernelCentilesNarrow, Int32Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelCentilesWide, Int32Type)->Apply(QuantileKernelArgs);
-BENCHMARK_TEMPLATE(QuantileKernelCentilesWide, DoubleType)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelCentilesNarrow, Int32Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelCentilesWide, Int32Type)->Apply(QuantileKernelArgs);
+// BENCHMARK_TEMPLATE(QuantileKernelCentilesWide, DoubleType)->Apply(QuantileKernelArgs);
 
 static void TDigestKernelDouble(benchmark::State& state, std::vector<double> q) {
   TDigestOptions options{std::move(q)};
@@ -798,9 +799,9 @@ static void TDigestKernelDoubleCentiles(benchmark::State& state) {
   TDigestKernelDouble(state, centiles());
 }
 
-BENCHMARK(TDigestKernelDoubleMedian)->Apply(QuantileKernelArgs);
-BENCHMARK(TDigestKernelDoubleDeciles)->Apply(QuantileKernelArgs);
-BENCHMARK(TDigestKernelDoubleCentiles)->Apply(QuantileKernelArgs);
+// BENCHMARK(TDigestKernelDoubleMedian)->Apply(QuantileKernelArgs);
+// BENCHMARK(TDigestKernelDoubleDeciles)->Apply(QuantileKernelArgs);
+// BENCHMARK(TDigestKernelDoubleCentiles)->Apply(QuantileKernelArgs);
 
 }  // namespace compute
 }  // namespace arrow

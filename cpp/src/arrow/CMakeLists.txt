@@ -228,6 +228,7 @@ set(ARROW_SRCS
     util/uri.cc
     util/utf8.cc
     util/value_parsing.cc
+    util/openformat_stats.cc
     vendored/base64.cpp
     vendored/datetime/tz.cpp
     vendored/double-conversion/bignum.cc
@@ -238,6 +239,7 @@ set(ARROW_SRCS
     vendored/double-conversion/fixed-dtoa.cc
     vendored/double-conversion/diy-fp.cc
     vendored/double-conversion/strtod.cc)
+
 
 if(ARROW_JEMALLOC)
   list(APPEND ARROW_SRCS memory_pool_jemalloc.cc)
@@ -576,6 +578,7 @@ add_arrow_lib(arrow
               SHARED_LINK_FLAGS
               ${ARROW_SHARED_LINK_FLAGS}
               SHARED_LINK_LIBS
+              ${ARROW_SHARED_LINK_LIBS}
               ${ARROW_LINK_LIBS}
               SHARED_PRIVATE_LINK_LIBS
               ${ARROW_SHARED_PRIVATE_LINK_LIBS}
@@ -587,6 +590,7 @@ add_arrow_lib(arrow
 # The following block includes a code for MSYS2 but GDB on MSYS2 doesn't
 # auto load our plugin. GDB's auto load may not be supported on MSYS2...
 # So it's disabled for now.
+
 if(ARROW_BUILD_SHARED AND NOT WIN32)
   configure_file(libarrow_gdb.py.in "${CMAKE_CURRENT_BINARY_DIR}/libarrow_gdb.py" @ONLY)
   set(ARROW_GDB_AUTO_LOAD_LIBARROW_GDB_INSTALL FALSE)
@@ -723,6 +727,7 @@ add_arrow_test(misc_test
                status_test.cc)
 
 add_arrow_test(public_api_test)
+
 
 set_source_files_properties(public_api_test.cc PROPERTIES SKIP_PRECOMPILE_HEADERS ON
                                                           SKIP_UNITY_BUILD_INCLUSION ON)

@@ -183,6 +183,7 @@ class ConcatenateImpl {
     }
     out_->buffers.resize(in[0]->buffers.size());
     out_->child_data.resize(in[0]->child_data.size());
+    out_->compression_type = in[0]->compression_type;
     for (auto& data : out_->child_data) {
       data = std::make_shared<ArrayData>();
     }
@@ -206,7 +207,7 @@ class ConcatenateImpl {
   Status Visit(const FixedWidthType& fixed) {
     // Handles numbers, decimal128, decimal256, fixed_size_binary
     ARROW_ASSIGN_OR_RAISE(auto buffers, Buffers(1, fixed));
-    return ConcatenateBuffers(buffers, pool_).Value(&out_->buffers[1]);
+    return ConcatenateBuffers(buffers, pool_, out_->compression_type, out_->length).Value(&out_->buffers[1]);
   }
 
   Status Visit(const BinaryType&) {
@@ -500,7 +501,7 @@ class ConcatenateImpl {
       if (buffer != nullptr) {
         ARROW_ASSIGN_OR_RAISE(auto sliced_buffer,
                               SliceBufferSafe(buffer, array_data->offset * byte_width,
-                                              array_data->length * byte_width));
+                                              buffer->size()));
         buffers.push_back(std::move(sliced_buffer));
       }
     }
@@ -588,6 +589,7 @@ Result<std::shared_ptr<Array>> Concatenate(const ArrayVector& arrays, MemoryPool
 
   std::shared_ptr<ArrayData> out_data;
   RETURN_NOT_OK(ConcatenateImpl(data, pool).Concatenate(&out_data));
+  out_data->SetCompressionType(data[0]->compression_type);
   return MakeArray(std::move(out_data));
 }
 

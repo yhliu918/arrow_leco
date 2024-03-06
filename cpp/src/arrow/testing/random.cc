@@ -191,7 +191,6 @@ static std::shared_ptr<NumericArray<ArrowType>> GenerateNumericArray(int64_t siz
   if (std::is_same<ArrowType, Date64Type>::value) {
     GenerateFullDayMillisNoNan(buffers[1]->mutable_data(), size);
   }
-
   auto array_data = ArrayData::Make(type, size, buffers, null_count);
   return std::make_shared<NumericArray<ArrowType>>(array_data);
 }

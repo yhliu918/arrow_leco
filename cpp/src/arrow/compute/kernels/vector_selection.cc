@@ -301,6 +301,52 @@ struct PrimitiveTakeImpl {
       if (values.null_count == 0) {
         // Values are never null, so things are easier
         valid_count += block.popcount;
+
+        // Fastest path: neither values nor index nulls
+        bit_util::SetBitsTo(out_is_valid, out_offset + position, block.length, true);
+        for (int64_t i = 0; i < block.length; ++i) {
+          out[position] = values.GetSingleValue<ValueCType>(1, indices_data[position]);
+          ++position;
+        }
+
+      } 
+      else{
+        std::cout<<"there are nulls in the data array!!!"<<std::endl;
+      }
+    }
+    out_arr->null_count = out_arr->length - valid_count;
+  }
+
+  static void Exec_old(const ArraySpan& values, const ArraySpan& indices,
+                   ArrayData* out_arr) {
+    const ValueCType* values_data = values.GetValues<ValueCType>(1);
+    const uint8_t* values_is_valid = values.buffers[0].data;
+    auto values_offset = values.offset;
+
+    const IndexCType* indices_data = indices.GetValues<IndexCType>(1);
+    const uint8_t* indices_is_valid = indices.buffers[0].data;
+    auto indices_offset = indices.offset;
+
+    auto out = out_arr->GetMutableValues<ValueCType>(1);
+    auto out_is_valid = out_arr->buffers[0]->mutable_data();
+    auto out_offset = out_arr->offset;
+
+    // If either the values or indices have nulls, we preemptively zero out the
+    // out validity bitmap so that we don't have to use ClearBit in each
+    // iteration for nulls.
+    if (values.null_count != 0 || indices.null_count != 0) {
+      bit_util::SetBitsTo(out_is_valid, out_offset, indices.length, false);
+    }
+
+    OptionalBitBlockCounter indices_bit_counter(indices_is_valid, indices_offset,
+                                                indices.length);
+    int64_t position = 0;
+    int64_t valid_count = 0;
+    while (position < indices.length) {
+      BitBlockCount block = indices_bit_counter.NextBlock();
+      if (values.null_count == 0) {
+        // Values are never null, so things are easier
+        valid_count += block.popcount;
         if (block.popcount == block.length) {
           // Fastest path: neither values nor index nulls
           bit_util::SetBitsTo(out_is_valid, out_offset + position, block.length, true);
@@ -585,7 +631,8 @@ class PrimitiveFilterImpl {
         filter_data_(filter.buffers[1].data),
         filter_null_count_(filter.null_count),
         filter_offset_(filter.offset),
-        null_selection_(null_selection) {
+        null_selection_(null_selection),
+        compression_type(values.compression_type) {
     if (values.type->id() != Type::BOOL) {
       // No offset applied for boolean because it's a bitmap
       values_data_ += values.offset;
@@ -599,6 +646,24 @@ class PrimitiveFilterImpl {
     out_offset_ = out_arr->offset;
     out_length_ = out_arr->length;
     out_position_ = 0;
+    value_byte_array = values.buffers[1].data;
+    if(compression_type !=CODEC::PLAIN){
+       const int* tmp_buffer = reinterpret_cast<const int*>(values.buffers[1].data);
+       blocks = tmp_buffer[0];
+       block_size = tmp_buffer[1];
+      for(int i=0;i<blocks;i++){
+        segment_start_idx.push_back(tmp_buffer[2+i]);
+      }
+      if(compression_type==CODEC::LECO){
+        codec_leco.init(blocks, block_size);
+      }
+      else if(compression_type==CODEC::FOR){
+        codec_for.init(blocks, block_size);
+      }
+      else if(compression_type==CODEC::DELTA){
+        codec_delta.init(blocks, block_size);
+      }
+    }
   }
 
   void ExecNonNull() {
@@ -738,12 +803,78 @@ class PrimitiveFilterImpl {
   // Write the next out_position given the selected in_position for the input
   // data and advance out_position
   void WriteValue(int64_t in_position) {
-    out_data_[out_position_++] = values_data_[in_position];
+    if(compression_type==CODEC::PLAIN){
+        out_data_[out_position_++] = values_data_[in_position];
+    }
+    else if(compression_type==CODEC::LECO){
+      out_data_[out_position_++] = codec_leco.randomdecodeArray8(value_byte_array+segment_start_idx[int(in_position/block_size)],in_position% block_size, nullptr, block_size);
+    }
+    else if(compression_type==CODEC::FOR){
+      out_data_[out_position_++] = codec_for.randomdecodeArray8(value_byte_array+segment_start_idx[int(in_position/block_size)],in_position% block_size, nullptr, block_size);
+    }
+    else if(compression_type==CODEC::DELTA){
+      out_data_[out_position_++] = codec_delta.randomdecodeArray8(value_byte_array+segment_start_idx[int(in_position/block_size)],in_position% block_size, nullptr, block_size);
+    }
+    
   }
 
   void WriteValueSegment(int64_t in_start, int64_t length) {
-    std::memcpy(out_data_ + out_position_, values_data_ + in_start, length * sizeof(T));
-    out_position_ += length;
+    if(compression_type==CODEC::PLAIN){
+        std::memcpy(out_data_ + out_position_, values_data_ + in_start, length * sizeof(T));
+        out_position_ += length;
+    }
+    else if(compression_type==CODEC::LECO){
+        int end_index = in_start + length-1;
+        int start_block = in_start / block_size;
+        int end_block = end_index / block_size;
+        int start_idx = in_start%block_size;
+        if(start_block==end_block){
+          codec_leco.decodeRange(value_byte_array+segment_start_idx[start_block], out_data_ + out_position_, start_idx, length);
+          out_position_ += length;
+        }
+        else{
+          codec_leco.decodeRange(value_byte_array+segment_start_idx[start_block], out_data_ + out_position_, start_idx, block_size - start_idx);
+          out_position_+= block_size - start_idx;
+          codec_leco.decodeRange(value_byte_array+segment_start_idx[end_block], out_data_ + out_position_, 0, length - block_size + start_idx);
+          out_position_+= length - block_size + start_idx;
+        }
+
+        
+    }
+    else if(compression_type==CODEC::FOR){
+        int end_index = in_start + length-1;
+        int start_block = in_start / block_size;
+        int end_block = end_index / block_size;
+        int start_idx = in_start%block_size;
+        if(start_block==end_block){
+          codec_for.decodeRange(value_byte_array+segment_start_idx[start_block], out_data_ + out_position_, start_idx, length);
+          out_position_ += length;
+        }
+        else{
+          codec_for.decodeRange(value_byte_array+segment_start_idx[start_block], out_data_ + out_position_, start_idx, block_size - start_idx);
+          out_position_+= block_size - start_idx;
+          codec_for.decodeRange(value_byte_array+segment_start_idx[end_block], out_data_ + out_position_, 0, length - block_size + start_idx);
+          out_position_+= length - block_size + start_idx;
+        }
+    }
+    else if(compression_type==CODEC::DELTA){
+        int end_index = in_start + length-1;
+        int start_block = in_start / block_size;
+        int end_block = end_index / block_size;
+        int start_idx = in_start%block_size;
+        if(start_block==end_block){
+          codec_delta.decodeRange(value_byte_array+segment_start_idx[start_block], out_data_ + out_position_, start_idx, length);
+          out_position_ += length;
+        }
+        else{
+          codec_delta.decodeRange(value_byte_array+segment_start_idx[start_block], out_data_ + out_position_, start_idx, block_size - start_idx);
+          out_position_+= block_size - start_idx;
+          codec_delta.decodeRange(value_byte_array+segment_start_idx[end_block], out_data_ + out_position_, 0, length - block_size + start_idx);
+          out_position_+= length - block_size + start_idx;
+        }
+    }
+    
+    
   }
 
   void WriteNull() {
@@ -767,6 +898,14 @@ class PrimitiveFilterImpl {
   int64_t out_offset_;
   int64_t out_length_;
   int64_t out_position_;
+  CODEC compression_type;
+  std::vector<int> segment_start_idx;
+  int blocks;
+  int block_size;
+  Codecset::Leco_int<T> codec_leco;
+  Codecset::FOR_int<T> codec_for;
+  Codecset::Delta_int<T> codec_delta;
+  uint8_t* value_byte_array;
 };
 
 template <>
@@ -2005,34 +2144,74 @@ Result<std::shared_ptr<ArrayData>> TakeAA(const std::shared_ptr<ArrayData>& valu
   return result.array();
 }
 
+std::shared_ptr<ArrayData> TakeCAimpl(const ChunkedArray& values,
+                                             const Array& indices,
+                                             const TakeOptions& options,
+                                             ExecContext* ctx){
+
+    std::vector<std::shared_ptr<Array>> array_chunks = values.chunks();
+    std::vector<std::shared_ptr<ArraySpan>> array_span;
+    for(auto item: array_chunks){
+      std::shared_ptr<arrow::ArrayData> array_data = item->data();
+      ArraySpan array_output(*array_data);    
+      array_span.push_back(std::move(std::make_shared<ArraySpan>(array_output)));
+    }
+    int block_size = array_span[0]->length;
+
+    std::shared_ptr<arrow::ArrayData> indice_data = indices.data();
+    ArraySpan indice_output(*indice_data);   
+    int* indexes = indice_output.GetValues<int>(1);
+
+    int64_t* output = new int64_t[indice_output.length];
+
+    int64_t position = 0;
+    int64_t valid_count = 0;
+
+    for (int64_t i = 0; i < indice_output.length; ++i) {
+      int idx = indexes[i];
+      output[position] = array_span[int(idx/block_size)]->GetSingleValue<int64_t>(1, idx%block_size);
+      ++position;
+    }
+    std::shared_ptr<Buffer> array_tmp = std::make_shared<Buffer>(reinterpret_cast<uint8_t*>(output),indice_output.length*sizeof(int64_t));
+    std::vector<std::shared_ptr<Buffer>> buffers = {nullptr, array_tmp};
+    std::shared_ptr<ArrayData> out_arr;
+    out_arr = ArrayData::Make(::arrow::int64(), indice_output.length,
+                                                std::move(buffers), /*null_count=*/0, 0, CODEC::PLAIN);
+
+    out_arr->null_count = 0;
+    return out_arr;
+}
+
 Result<std::shared_ptr<ChunkedArray>> TakeCA(const ChunkedArray& values,
                                              const Array& indices,
                                              const TakeOptions& options,
                                              ExecContext* ctx) {
-  auto num_chunks = values.num_chunks();
-  std::shared_ptr<Array> current_chunk;
+  // auto num_chunks = values.num_chunks();
+  // std::shared_ptr<Array> current_chunk;
 
-  // Case 1: `values` has a single chunk, so just use it
-  if (num_chunks == 1) {
-    current_chunk = values.chunk(0);
-  } else {
-    // TODO Case 2: See if all `indices` fall in the same chunk and call Array Take on it
-    // See
-    // https://github.com/apache/arrow/blob/6f2c9041137001f7a9212f244b51bc004efc29af/r/src/compute.cpp#L123-L151
-    // TODO Case 3: If indices are sorted, can slice them and call Array Take
+  // // Case 1: `values` has a single chunk, so just use it
+  // if (num_chunks == 1) {
+  //   current_chunk = values.chunk(0);
+  // } else {
+  //   // TODO Case 2: See if all `indices` fall in the same chunk and call Array Take on it
+  //   // See
+  //   // https://github.com/apache/arrow/blob/6f2c9041137001f7a9212f244b51bc004efc29af/r/src/compute.cpp#L123-L151
+  //   // TODO Case 3: If indices are sorted, can slice them and call Array Take
 
-    // Case 4: Else, concatenate chunks and call Array Take
-    if (values.chunks().empty()) {
-      ARROW_ASSIGN_OR_RAISE(current_chunk, MakeArrayOfNull(values.type(), /*length=*/0,
-                                                           ctx->memory_pool()));
-    } else {
-      ARROW_ASSIGN_OR_RAISE(current_chunk,
-                            Concatenate(values.chunks(), ctx->memory_pool()));
-    }
-  }
-  // Call Array Take on our single chunk
-  ARROW_ASSIGN_OR_RAISE(std::shared_ptr<ArrayData> new_chunk,
-                        TakeAA(current_chunk->data(), indices.data(), options, ctx));
+  //   // Case 4: Else, concatenate chunks and call Array Take
+  //   if (values.chunks().empty()) {
+  //     ARROW_ASSIGN_OR_RAISE(current_chunk, MakeArrayOfNull(values.type(), /*length=*/0,
+  //                                                          ctx->memory_pool()));
+  //   } else {
+  //     ARROW_ASSIGN_OR_RAISE(current_chunk,
+  //                           Concatenate(values.chunks(), ctx->memory_pool()));
+  //   }
+  // }
+
+  // // Call Array Take on our single chunk
+  // ARROW_ASSIGN_OR_RAISE(std::shared_ptr<ArrayData> new_chunk,
+  //                       TakeAA(current_chunk->data(), indices.data(), options, ctx));
+  std::shared_ptr<ArrayData> new_chunk = TakeCAimpl(values, indices, options, ctx);
   std::vector<std::shared_ptr<Array>> chunks = {MakeArray(new_chunk)};
   return std::make_shared<ChunkedArray>(std::move(chunks));
 }

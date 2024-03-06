@@ -79,6 +79,7 @@ class NumericBuilder : public ArrayBuilder {
   using TypeClass = T;
   using value_type = typename T::c_type;
   using ArrayType = typename TypeTraits<T>::ArrayType;
+  CODEC compress_type = CODEC::PLAIN;
 
   template <typename T1 = T>
   explicit NumericBuilder(
@@ -88,6 +89,9 @@ class NumericBuilder : public ArrayBuilder {
   NumericBuilder(const std::shared_ptr<DataType>& type, MemoryPool* pool)
       : ArrayBuilder(pool), type_(type), data_builder_(pool) {}
 
+  void SetCompress(CODEC codec ){
+    compress_type = codec; 
+  }
   /// Append a single scalar and increase the size if necessary.
   Status Append(const value_type val) {
     ARROW_RETURN_NOT_OK(ArrayBuilder::Reserve(1));
@@ -153,13 +157,26 @@ class NumericBuilder : public ArrayBuilder {
   /// indicates a valid (non-null) value
   /// \return Status
   Status AppendValues(const value_type* values, int64_t length,
-                      const uint8_t* valid_bytes = NULLPTR) {
+                      const uint8_t* valid_bytes = NULLPTR, int blocks = 1000) {
     ARROW_RETURN_NOT_OK(Reserve(length));
-    data_builder_.UnsafeAppend(values, length);
+    if(compress_type == CODEC::PLAIN){
+      data_builder_.UnsafeAppend(values, length);
+    }
+    else if(compress_type == CODEC::FOR){
+      data_builder_.UnsafeAppend(values, length, CODEC::FOR, blocks);
+    }
+    else if(compress_type == CODEC::LECO){
+      data_builder_.UnsafeAppend(values, length, CODEC::LECO, blocks);
+    }
+    else if(compress_type == CODEC::DELTA){
+      data_builder_.UnsafeAppend(values, length, CODEC::DELTA, blocks);
+    }
+    // std::cout<< data_builder_.length()<<std::endl;
     // length_ is update by these
     ArrayBuilder::UnsafeAppendToBitmap(valid_bytes, length);
     return Status::OK();
   }
+
 
   /// \brief Append a sequence of elements in one shot
   /// \param[in] values a contiguous C array of values
@@ -212,7 +229,7 @@ class NumericBuilder : public ArrayBuilder {
     ARROW_ASSIGN_OR_RAISE(auto null_bitmap,
                           null_bitmap_builder_.FinishWithLength(length_));
     ARROW_ASSIGN_OR_RAISE(auto data, data_builder_.FinishWithLength(length_));
-    *out = ArrayData::Make(type(), length_, {null_bitmap, data}, null_count_);
+    *out = ArrayData::Make(type(), length_, {null_bitmap, data}, null_count_, 0, this->compress_type);
     capacity_ = length_ = null_count_ = 0;
     return Status::OK();
   }

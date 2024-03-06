@@ -32,7 +32,7 @@
 #include "arrow/util/visibility.h"
 
 namespace arrow {
-
+enum CODEC { PLAIN, FOR, LECO, DELTA };
 // ----------------------------------------------------------------------
 // Buffer classes
 
@@ -495,7 +495,7 @@ Result<std::shared_ptr<Buffer>> AllocateEmptyBitmap(int64_t length,
 /// \param[in] pool memory pool to allocate the new buffer from
 ARROW_EXPORT
 Result<std::shared_ptr<Buffer>> ConcatenateBuffers(const BufferVector& buffers,
-                                                   MemoryPool* pool = NULLPTR);
+                                                   MemoryPool* pool = NULLPTR, CODEC codec=CODEC::PLAIN, int length = 0);
 
 ARROW_EXPORT
 Status ConcatenateBuffers(const BufferVector& buffers, MemoryPool* pool,

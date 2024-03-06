@@ -52,6 +52,22 @@ std::shared_ptr<Scanner> Scanner::Make(std::shared_ptr<ColumnReader> col_reader,
   // Unreachable code, but suppress compiler warning
   return std::shared_ptr<Scanner>(nullptr);
 }
+std::shared_ptr<ArraySpan> ScanAllValuesArrow(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+                      const uint8_t* values, int64_t* values_buffered,
+                      parquet::ColumnReader* reader) {
+  switch (reader->type()) {
+    case parquet::Type::INT32:
+      return ScanAllArrow<parquet::Int32Reader>(batch_size, def_levels, rep_levels, values,
+                                           values_buffered, reader);
+    case parquet::Type::INT64:
+      return ScanAllArrow<parquet::Int64Reader>(batch_size, def_levels, rep_levels, values,
+                                           values_buffered, reader);
+    default:
+      parquet::ParquetException::NYI("type reader not implemented");
+  }
+  // Unreachable code, but suppress compiler warning
+  return 0;
+}
 
 int64_t ScanAllValues(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                       uint8_t* values, int64_t* values_buffered,
@@ -109,7 +125,7 @@ int64_t ScanAllValuesBitpos(int32_t batch_size, int16_t* def_levels, int16_t* re
 
 int64_t FilterScanAllValues(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                       uint8_t* values, int64_t* values_buffered,
-                      parquet::ColumnReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val){
+                      parquet::ColumnReader* reader, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val){
   switch (reader->type()) {
     case parquet::Type::INT32:
       return FilterScanAll<parquet::Int32Reader>(batch_size, def_levels, rep_levels,

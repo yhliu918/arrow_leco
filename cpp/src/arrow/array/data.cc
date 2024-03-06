@@ -62,10 +62,10 @@ static inline void AdjustNonNullable(Type::type type_id, int64_t length,
 
 std::shared_ptr<ArrayData> ArrayData::Make(std::shared_ptr<DataType> type, int64_t length,
                                            std::vector<std::shared_ptr<Buffer>> buffers,
-                                           int64_t null_count, int64_t offset) {
+                                           int64_t null_count, int64_t offset, CODEC codec) {
   AdjustNonNullable(type->id(), length, &buffers, &null_count);
   return std::make_shared<ArrayData>(std::move(type), length, std::move(buffers),
-                                     null_count, offset);
+                                     null_count, offset, codec);
 }
 
 std::shared_ptr<ArrayData> ArrayData::Make(
@@ -93,6 +93,10 @@ std::shared_ptr<ArrayData> ArrayData::Make(
 std::shared_ptr<ArrayData> ArrayData::Make(std::shared_ptr<DataType> type, int64_t length,
                                            int64_t null_count, int64_t offset) {
   return std::make_shared<ArrayData>(std::move(type), length, null_count, offset);
+}
+
+void ArrayData::SetCompressionType(CODEC codec){
+  this->compression_type = codec;
 }
 
 std::shared_ptr<ArrayData> ArrayData::Slice(int64_t off, int64_t len) const {
@@ -144,6 +148,7 @@ void ArraySpan::SetMembers(const ArrayData& data) {
     this->null_count = data.null_count.load();
   }
   this->offset = data.offset;
+  this->compression_type = data.compression_type;
 
   for (int i = 0; i < static_cast<int>(data.buffers.size()); ++i) {
     const std::shared_ptr<Buffer>& buffer = data.buffers[i];
@@ -398,7 +403,7 @@ int ArraySpan::num_buffers() const { return GetNumBuffers(*this->type); }
 std::shared_ptr<ArrayData> ArraySpan::ToArrayData() const {
   auto result = std::make_shared<ArrayData>(this->type->GetSharedPtr(), this->length,
                                             this->null_count, this->offset);
-
+  result->SetCompressionType(this->compression_type);
   for (int i = 0; i < this->num_buffers(); ++i) {
     result->buffers.emplace_back(this->GetBuffer(i));
   }

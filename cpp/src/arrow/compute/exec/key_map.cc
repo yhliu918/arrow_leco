@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iostream>
 
 #include "arrow/util/bit_util.h"
 #include "arrow/util/bitmap_ops.h"
@@ -470,7 +471,7 @@ void SwissTable::find(const int num_keys, const uint32_t* hashes,
     run_comparisons(num_ids, ids, nullptr, out_group_ids, &num_ids, ids, equal_impl,
                     callback_ctx);
   }
-
+  // std::cout<<num_ids<<std::endl;
   if (num_ids == 0) {
     return;
   }

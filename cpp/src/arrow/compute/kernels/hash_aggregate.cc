@@ -174,7 +174,10 @@ VisitGroupedValues(const ExecSpan& batch, ConsumeValue&& valid_func,
     VisitArrayValuesInline<Type>(
         batch[0].array,
         [&](typename TypeTraits<Type>::CType val) { valid_func(*g++, val); },
-        [&]() { null_func(*g++); });
+        [&]() { 
+          null_func(*g); 
+          // null_func(*g++); 
+        });
     return;
   }
   const Scalar& input = *batch[0].scalar;
@@ -350,7 +353,9 @@ struct GroupedReducingAggregator : public GroupedAggregator {
           reduced[g] = Impl::Reduce(*out_type_, reduced[g], value);
           counts[g]++;
         },
-        [&](uint32_t g) { bit_util::SetBitTo(no_nulls, g, false); });
+        [&](uint32_t g) { 
+          // bit_util::SetBitTo(no_nulls, g, false); 
+          });
     return Status::OK();
   }
 

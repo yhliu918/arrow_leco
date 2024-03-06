@@ -33,9 +33,60 @@ namespace internal {
 template <typename T, typename Enable = void>
 struct ArraySpanInlineVisitor {};
 
+template <typename T>
+struct ArraySpanInlineVisitor<T, enable_if_integer<T>> {
+  using c_type = typename T::c_type;
+
+  template <typename ValidFunc, typename NullFunc>
+  static Status VisitStatus(const ArraySpan& arr, ValidFunc&& valid_func,
+                            NullFunc&& null_func) {
+    const c_type* data = arr.GetValues<c_type>(1);
+    auto visit_valid = [&](int64_t i) { return valid_func(data[i]); };
+    return VisitBitBlocks(arr.buffers[0].data, arr.offset, arr.length,
+                          std::move(visit_valid), std::forward<NullFunc>(null_func));
+  }
+
+  template <typename ValidFunc, typename NullFunc>
+  static void VisitVoid(const ArraySpan& arr, ValidFunc&& valid_func,
+                        NullFunc&& null_func) {
+    using c_type = typename T::c_type;
+    if(arr.compression_type==CODEC::PLAIN){
+      const c_type* data = arr.GetValues<c_type>(1);
+      auto visit_valid = [&](int64_t i) { valid_func(data[i]); };
+      VisitBitBlocksVoid(arr.buffers[0].data, arr.offset, arr.length,
+                       std::move(visit_valid), std::forward<NullFunc>(null_func));
+    }
+    else if (arr.compression_type==CODEC::DELTA){
+      int block_size = 0;
+      memcpy(&block_size, arr.buffers[1].data+sizeof(int), sizeof(int));
+      int64_t* tmpvalue = new int64_t[block_size];
+      int current_decode_id = 0;
+      bool init = false;
+      // arr.DecodeBlock(current_decode_id, tmpvalue);
+      auto visit_valid = [&](int64_t i) { 
+        if(i/block_size != current_decode_id||!init){
+          current_decode_id = i/block_size;
+          arr.DecodeBlock(current_decode_id, tmpvalue);
+          init = true;
+        }
+        else{
+          valid_func(c_type(tmpvalue[i%block_size]));
+        }
+      };
+      VisitBitBlocksVoid(arr.buffers[0].data, arr.offset, arr.length,
+                       std::move(visit_valid), std::forward<NullFunc>(null_func));
+    }
+    else{
+      auto visit_valid = [&](int64_t i) { valid_func(c_type(arr.GetSingleValue<int64_t>(1,i))); };
+      VisitBitBlocksVoid(arr.buffers[0].data, arr.offset, arr.length,
+                       std::move(visit_valid), std::forward<NullFunc>(null_func));
+    }
+  }
+};
+
 // Numeric and primitive C-compatible types
 template <typename T>
-struct ArraySpanInlineVisitor<T, enable_if_has_c_type<T>> {
+struct ArraySpanInlineVisitor<T,enable_if_t<has_c_type<T>::value && !is_integer_type<T>::value, void>> {
   using c_type = typename T::c_type;
 
   template <typename ValidFunc, typename NullFunc>

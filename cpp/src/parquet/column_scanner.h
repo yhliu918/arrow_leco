@@ -255,6 +255,16 @@ int64_t ScanAll(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
 }
 
 template <typename RType>
+std::shared_ptr<ArraySpan> ScanAllArrow(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
+                 const uint8_t* values, int64_t* values_buffered,
+                parquet::ColumnReader* reader) {
+  typedef typename RType::T Type;
+  auto typed_reader = static_cast<RType*>(reader);
+  return typed_reader->ReadBatchArrow(batch_size, def_levels, rep_levels, values,
+                                 values_buffered);
+}
+
+template <typename RType>
 int64_t ScanAllBitpos(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                       uint8_t* values, int64_t* values_buffered,
                       parquet::ColumnReader* reader, int64_t* values_true_read,
@@ -269,7 +279,7 @@ int64_t ScanAllBitpos(int32_t batch_size, int16_t* def_levels, int16_t* rep_leve
 template <typename RType>
 int64_t FilterScanAll(int32_t batch_size, int16_t* def_levels, int16_t* rep_levels,
                 uint8_t* values, int64_t* values_buffered,
-                parquet::ColumnReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
+                parquet::ColumnReader* reader, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val) {
   typedef typename RType::T Type;
   auto typed_reader = static_cast<RType*>(reader);
   auto vals = reinterpret_cast<Type*>(&values[0]);
@@ -279,6 +289,10 @@ int64_t FilterScanAll(int32_t batch_size, int16_t* def_levels, int16_t* rep_leve
 
 int64_t PARQUET_EXPORT ScanAllValues(int32_t batch_size, int16_t* def_levels,
                                      int16_t* rep_levels, uint8_t* values,
+                                     int64_t* values_buffered,
+                                     parquet::ColumnReader* reader);
+std::shared_ptr<ArraySpan> PARQUET_EXPORT ScanAllValuesArrow(int32_t batch_size, int16_t* def_levels,
+                                     int16_t* rep_levels,  const uint8_t* values,
                                      int64_t* values_buffered,
                                      parquet::ColumnReader* reader);
 
@@ -291,5 +305,5 @@ int64_t PARQUET_EXPORT ScanAllValuesBitpos(int32_t batch_size, int16_t* def_leve
 int64_t PARQUET_EXPORT FilterScanAllValues(int32_t batch_size, int16_t* def_levels,
                                      int16_t* rep_levels, uint8_t* values,
                                      int64_t* values_buffered,
-                                     parquet::ColumnReader* reader, int64_t filter_val, std::vector<uint32_t>& bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val);
+                                     parquet::ColumnReader* reader, int64_t filter_val, uint32_t* bitpos, bool is_gt, int64_t* filter_count, int64_t filter2, int64_t base_val);
 }  // namespace parquet

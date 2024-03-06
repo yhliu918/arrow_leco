@@ -218,20 +218,77 @@ enable_if_t<std::is_floating_point<SumType>::value, SumType> SumArray(
 // naive summation for integers and decimals
 template <typename ValueType, typename SumType, SimdLevel::type SimdLevel,
           typename ValueFunc>
-enable_if_t<!std::is_floating_point<SumType>::value, SumType> SumArray(
+enable_if_t<std::is_integral<SumType>::value, SumType> SumArray(
     const ArraySpan& data, ValueFunc&& func) {
   using arrow::internal::VisitSetBitRunsVoid;
 
   SumType sum = 0;
-  const ValueType* values = data.GetValues<ValueType>(1);
+  const ValueType* values = nullptr;
+  if(data.compression_type==CODEC::PLAIN || sizeof(ValueType)>8){
+    values = data.GetValues<ValueType>(1);
+    VisitSetBitRunsVoid(data.buffers[0].data, data.offset, data.length,
+                      [&](int64_t pos, int64_t len) {
+                        for (int64_t i = 0; i < len; ++i) {
+                          sum += func(values[pos + i]);
+                          // std::cout<<sum<<std::endl;
+                        }
+                      });
+  }
+  else if (data.compression_type==CODEC::DELTA){
+    int block_size = 0;
+    memcpy(&block_size, data.buffers[1].data+sizeof(int), sizeof(int));
+    ValueType* tmpvalue = new ValueType[block_size];
+    int current_decode_id = 0;
+    data.DecodeBlock(current_decode_id, tmpvalue);
+    VisitSetBitRunsVoid(data.buffers[0].data, data.offset, data.length,
+                      [&](int64_t pos, int64_t len) {
+                        for(int64_t i=0;i<len;i++){
+                          if((pos+i)/block_size!=current_decode_id){
+                            current_decode_id = (pos+i)/block_size;
+                            data.DecodeBlock(current_decode_id, tmpvalue);
+                          }
+                          sum += func(tmpvalue[(pos+i)%block_size]);
+                          // std::cout<<sum<<std::endl;
+                        }
+
+                      });
+  }
+  else{
+    data.init_codec();
+    VisitSetBitRunsVoid(data.buffers[0].data, data.offset, data.length,
+                      [&](int64_t pos, int64_t len) {
+                        sum+=data.GetSumRange<ValueType>(1, pos, pos+len-1);
+                      });
+    // sum = data.GetSum<ValueType>(1);
+  }
+  
+  // std::cout<<sum<<std::endl;
+
+  
+  return sum;
+}
+
+template <typename ValueType, typename SumType, SimdLevel::type SimdLevel,
+          typename ValueFunc>
+enable_if_t<!std::is_floating_point<SumType>::value && !std::is_integral<SumType>::value, SumType> SumArray(
+    const ArraySpan& data, ValueFunc&& func) {
+  using arrow::internal::VisitSetBitRunsVoid;
+
+  SumType sum = 0;
+  const ValueType* values = nullptr;
+  values = data.GetValues<ValueType>(1);
+  
   VisitSetBitRunsVoid(data.buffers[0].data, data.offset, data.length,
                       [&](int64_t pos, int64_t len) {
                         for (int64_t i = 0; i < len; ++i) {
                           sum += func(values[pos + i]);
                         }
                       });
+
+  
   return sum;
 }
+
 
 template <typename ValueType, typename SumType, SimdLevel::type SimdLevel>
 SumType SumArray(const ArraySpan& data) {

@@ -32,6 +32,10 @@
 #include "arrow/util/macros.h"
 #include "arrow/util/ubsan.h"
 #include "arrow/util/visibility.h"
+#include "leco/piecewise_fix_integer_template.h"
+#include "leco/FOR_integer_template.h"
+#include "leco/delta_integer_template.h"
+// #include "arrow/compress.h"
 
 namespace arrow {
 
@@ -243,6 +247,114 @@ class TypedBufferBuilder<
   void UnsafeAppend(const T* values, int64_t num_elements) {
     bytes_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(values),
                                 num_elements * sizeof(T));
+  }
+
+  void UnsafeAppend(const T* values, int64_t num_elements, CODEC compress_type, int blocks = 1000) {
+    if(compress_type==CODEC::PLAIN){
+      bytes_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(values),
+                                num_elements * sizeof(T));
+    }
+    else if (compress_type == CODEC::FOR){
+      Codecset::FOR_int<T> codec;
+      int block_size = num_elements / blocks;
+      blocks = num_elements / block_size;
+      if (blocks * block_size < num_elements)
+      {
+          blocks++;
+      } 
+      codec.init(blocks, block_size);
+      uint8_t* tmp_value = (uint8_t*)malloc(num_elements * sizeof(T) * 4);
+      memcpy(tmp_value, &blocks, sizeof(blocks));
+      memcpy(tmp_value+sizeof(int), &block_size, sizeof(block_size));
+      uint8_t* write_ptr = tmp_value+sizeof(int) + sizeof(int) + sizeof(int)*blocks ; // first record the blocksize and the lsit of start position.
+      for(int i = 0;i< blocks;i++){
+        int block_length = block_size;
+        if (i == blocks - 1)
+        {
+            block_length = num_elements - (blocks - 1) * block_size;
+        }
+        uint8_t* res = write_ptr;
+        res = codec.encodeArray8_int(values + (i * block_size), block_length, write_ptr, i);
+        uint32_t start_pos = write_ptr - tmp_value;
+        // record start_idx
+        memcpy(tmp_value+sizeof(int)+sizeof(int)+i*sizeof(int), &start_pos, sizeof(start_pos));
+        //increment write_ptr
+        write_ptr = res;
+      }
+      uint32_t total_size = write_ptr - tmp_value;
+      tmp_value = (uint8_t*)realloc(tmp_value, total_size);
+
+      bytes_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(tmp_value),
+                                total_size);
+    }
+    else if (compress_type == CODEC::LECO){
+      Codecset::Leco_int<T> codec;
+      int block_size = num_elements / blocks;
+      blocks = num_elements / block_size;
+      if (blocks * block_size < num_elements)
+      {
+          blocks++;
+      } 
+      codec.init(blocks, block_size);
+      uint8_t* tmp_value = (uint8_t*)malloc(num_elements * sizeof(T) * 4);
+      memcpy(tmp_value, &blocks, sizeof(blocks));
+      memcpy(tmp_value+sizeof(int), &block_size, sizeof(block_size));
+      uint8_t* write_ptr = tmp_value+sizeof(int) + sizeof(int) + sizeof(int)*blocks ; // first record the blocksize and the lsit of start position.
+      for(int i = 0;i< blocks;i++){
+        int block_length = block_size;
+        if (i == blocks - 1)
+        {
+            block_length = num_elements - (blocks - 1) * block_size;
+        }
+        uint8_t* res = write_ptr;
+        res = codec.encodeArray8_int(values + (i * block_size), block_length, write_ptr, i);
+        uint32_t start_pos = write_ptr - tmp_value;
+        // record start_idx
+        memcpy(tmp_value+sizeof(int)+sizeof(int)+i*sizeof(int), &start_pos, sizeof(start_pos));
+        //increment write_ptr
+        write_ptr = res;
+      }
+      uint32_t total_size = write_ptr - tmp_value;
+      tmp_value = (uint8_t*)realloc(tmp_value, total_size);
+
+      bytes_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(tmp_value),
+                                total_size);
+    }
+    else if (compress_type == CODEC::DELTA){
+      Codecset::Delta_int<T> codec;
+      int block_size = num_elements / blocks;
+      blocks = num_elements / block_size;
+      if (blocks * block_size < num_elements)
+      {
+          blocks++;
+      } 
+      codec.init(blocks, block_size);
+      uint8_t* tmp_value = (uint8_t*)malloc(num_elements * sizeof(T) * 4);
+      memcpy(tmp_value, &blocks, sizeof(blocks));
+      memcpy(tmp_value+sizeof(int), &block_size, sizeof(block_size));
+      uint8_t* write_ptr = tmp_value+sizeof(int) + sizeof(int) + sizeof(int)*blocks ; // first record the blocksize and the lsit of start position.
+      for(int i = 0;i< blocks;i++){
+        int block_length = block_size;
+        if (i == blocks - 1)
+        {
+            block_length = num_elements - (blocks - 1) * block_size;
+        }
+        uint8_t* res = write_ptr;
+        res = codec.encodeArray8_int(values + (i * block_size), block_length, write_ptr, i);
+        uint32_t start_pos = write_ptr - tmp_value;
+        // record start_idx
+        memcpy(tmp_value+sizeof(int)+sizeof(int)+i*sizeof(int), &start_pos, sizeof(start_pos));
+        //increment write_ptr
+        write_ptr = res;
+      }
+      uint32_t total_size = write_ptr - tmp_value;
+      tmp_value = (uint8_t*)realloc(tmp_value, total_size);
+
+      bytes_builder_.UnsafeAppend(reinterpret_cast<const uint8_t*>(tmp_value),
+                                total_size);
+    }
+  
+  
   }
 
   template <typename Iter>

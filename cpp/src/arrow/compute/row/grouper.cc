@@ -285,7 +285,7 @@ struct GrouperFastImpl : Grouper {
         return ConsumeImpl(ExecSpan(expanded));
       }
     }
-    return ConsumeImpl(batch);
+    return ConsumeImplNew(batch);
   }
 
   Result<Datum> ConsumeImpl(const ExecSpan& batch) {
@@ -322,6 +322,12 @@ struct GrouperFastImpl : Grouper {
         if (batch[icol].array.buffers[0].data != NULLPTR) {
           non_nulls = batch[icol].array.buffers[0].data;
         }
+        // if(batch[icol].array.compression_type!=CODEC::PLAIN){
+        //   fixedlen = reinterpret_cast<const uint8_t*>(batch[icol].array.GetCompressedValues<int64_t>(1));
+        // }
+        // else{
+        //   fixedlen = batch[icol].array.buffers[1].data;
+        // }
         fixedlen = batch[icol].array.buffers[1].data;
         if (!col_metadata_[icol].is_fixed_length) {
           varlen = batch[icol].array.buffers[2].data;
@@ -383,6 +389,106 @@ struct GrouperFastImpl : Grouper {
     return Datum(UInt32Array(batch.length, std::move(group_ids)));
   }
 
+ 
+  Result<Datum> ConsumeImplNew(const ExecSpan& batch) {
+    int64_t num_rows = batch.length;
+    int num_columns = batch.num_values();
+    // Process dictionaries
+    for (int icol = 0; icol < num_columns; ++icol) {
+      if (key_types_[icol].id() == Type::DICTIONARY) {
+        const ArraySpan& data = batch[icol].array;
+        auto dict = MakeArray(data.dictionary().ToArrayData());
+        if (dictionaries_[icol]) {
+          if (!dictionaries_[icol]->Equals(dict)) {
+            // TODO(bkietz) unify if necessary. For now, just error if any batch's
+            // dictionary differs from the first we saw for this key
+            return Status::NotImplemented("Unifying differing dictionaries");
+          }
+        } else {
+          dictionaries_[icol] = std::move(dict);
+        }
+      }
+    }
+
+    std::shared_ptr<arrow::Buffer> group_ids;
+    ARROW_ASSIGN_OR_RAISE(
+        group_ids, AllocateBuffer(sizeof(uint32_t) * num_rows, ctx_->memory_pool()));
+
+    for (int icol = 0; icol < num_columns; ++icol) {
+      const uint8_t* non_nulls = NULLPTR;
+      const uint8_t* fixedlen = NULLPTR;
+      const uint8_t* varlen = NULLPTR;
+
+      // Skip if the key's type is NULL
+      if (key_types_[icol].id() != Type::NA) {
+        if (batch[icol].array.buffers[0].data != NULLPTR) {
+          non_nulls = batch[icol].array.buffers[0].data;
+        }
+        fixedlen = batch[icol].array.buffers[1].data;
+        if (!col_metadata_[icol].is_fixed_length) {
+          varlen = batch[icol].array.buffers[2].data;
+        }
+      }
+
+      int64_t offset = batch[icol].array.offset;
+
+      auto col_base = KeyColumnArray(col_metadata_[icol], offset + num_rows, non_nulls,
+                                     fixedlen, varlen);
+
+      cols_[icol] = col_base.Slice(offset, num_rows);
+    }
+
+    // Split into smaller mini-batches
+    //
+    uint8_t* outbuff = new uint8_t[10000*8+100];
+    int group_write_index = 0;
+    for (uint32_t start_row = 0; start_row < num_rows;) {
+      uint32_t batch_size_next = std::min(static_cast<uint32_t>(minibatch_size_),
+                                          static_cast<uint32_t>(num_rows) - start_row);
+
+      // Encode
+      rows_minibatch_.Clean();
+      encoder_.PrepareEncodeSelected(0, num_rows, cols_);
+      int number_remain = 0; 
+      // Compute hash
+      Hashing32::HashMultiColumnNew(encoder_.batch_all_cols(), &encode_ctx_,
+                                 minibatch_hashes_.data(), batch[0].array.compression_type, start_row, batch_size_next, outbuff, &number_remain);
+
+      // Map
+      auto match_bitvector =
+          util::TempVectorHolder<uint8_t>(&temp_stack_, (number_remain + 7) / 8);
+      {
+        auto local_slots = util::TempVectorHolder<uint8_t>(&temp_stack_, number_remain);
+        map_.early_filter(number_remain, minibatch_hashes_.data(),
+                          match_bitvector.mutable_data(), local_slots.mutable_data());
+        map_.find(number_remain, minibatch_hashes_.data(),
+                  match_bitvector.mutable_data(), local_slots.mutable_data(),
+                  reinterpret_cast<uint32_t*>(group_ids->mutable_data()) + group_write_index,
+                  &temp_stack_, map_equal_impl_, nullptr);
+      }
+      auto ids = util::TempVectorHolder<uint16_t>(&temp_stack_, number_remain);
+      int num_ids;
+      util::bit_util::bits_to_indexes(0, encode_ctx_.hardware_flags, number_remain,
+                                      match_bitvector.mutable_data(), &num_ids,
+                                      ids.mutable_data());
+
+      RETURN_NOT_OK(map_.map_new_keys(
+          num_ids, ids.mutable_data(), minibatch_hashes_.data(),
+          reinterpret_cast<uint32_t*>(group_ids->mutable_data()) + group_write_index,
+          &temp_stack_, map_equal_impl_, map_append_impl_, nullptr));
+
+      start_row += batch_size_next;
+      group_write_index+=number_remain;
+
+      if (minibatch_size_ * 2 <= minibatch_size_max_) {
+        minibatch_size_ *= 2;
+      }
+    }
+
+    return Datum(UInt32Array(batch.length, std::move(group_ids)));
+  }
+
+ 
   uint32_t num_groups() const override { return static_cast<uint32_t>(rows_.length()); }
 
   // Make sure padded buffers end up with the right logical size

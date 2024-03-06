@@ -145,11 +145,14 @@ class ArrayCompareSorter {
  public:
   NullPartitionResult operator()(uint64_t* indices_begin, uint64_t* indices_end,
                                  const Array& array, int64_t offset,
-                                 const ArraySortOptions& options) {
+                                 const ArraySortOptions& options, bool noneed=false) {
     const auto& values = checked_cast<const ArrayType&>(array);
 
     const auto p = PartitionNulls<ArrayType, StablePartitioner>(
         indices_begin, indices_end, values, offset, options.null_placement);
+    if(noneed){
+      return p;
+    }
     if (options.order == SortOrder::Ascending) {
       std::stable_sort(
           p.non_nulls_begin, p.non_nulls_end,
@@ -320,7 +323,7 @@ class ArrayCountOrCompareSorter {
  public:
   NullPartitionResult operator()(uint64_t* indices_begin, uint64_t* indices_end,
                                  const Array& array, int64_t offset,
-                                 const ArraySortOptions& options) {
+                                 const ArraySortOptions& options, bool noneed=false) {
     const auto& values = checked_cast<const ArrayType&>(array);
 
     if (values.length() >= countsort_min_len_ && values.length() > values.null_count()) {
@@ -336,7 +339,7 @@ class ArrayCountOrCompareSorter {
       }
     }
 
-    return compare_sorter_(indices_begin, indices_end, values, offset, options);
+    return compare_sorter_(indices_begin, indices_end, values, offset, options, true);
   }
 
  private:
